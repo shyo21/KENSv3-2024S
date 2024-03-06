@@ -129,9 +129,6 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     //
 
     // Write()
-    /* initialize RESPONSE array */
-    memset(&RESPONSE, 0, sizeof(RESPONSE));
-
     /* get ip address of server & client, convert them to String and store */
     const char *server_ipaddr = inet_ntop(AF_INET, &(server_addr.sin_addr),
                                           SERVER_IP, sizeof(SERVER_IP));
@@ -146,6 +143,9 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
       return -1;
     }
 
+    /* initialize RESPONSE array */
+    memset(&RESPONSE, 0, sizeof(RESPONSE));
+
     /* handle 3 special requests, else just echo back */
     if (strcmp("hello", BUFFER) == 0) {
       strcpy(RESPONSE, server_hello);
@@ -156,9 +156,6 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     } else {
       strcpy(RESPONSE, BUFFER);
     }
-
-    /* add new line character at the end of response string */
-    RESPONSE[strlen(RESPONSE) + 1] = '\n';
 
     /* actual write function */
     ssize_t written_bytes = write(client_socket, RESPONSE, strlen(RESPONSE));
