@@ -6,6 +6,8 @@
 
 #include <arpa/inet.h>
 
+// #include <iostream>
+
 // !IMPORTANT: allowed system calls.
 // !DO NOT USE OTHER NETWORK SYSCALLS (send, recv, select, poll, epoll, fork
 // etc.)
@@ -24,16 +26,18 @@
 int EchoAssignment::serverMain(const char *bind_ip, int port,
                                const char *server_hello) {
 
+  // Your server code
+  // !IMPORTANT: do not use global variables and do not define/use functions
+  // !IMPORTANT: for all system calls, when an error happens, your program must
+  // return. e.g., if an read() call return -1, return -1 for serverMain.
+
   // Local variables
-  const int BACKLOG_SIZE = 100; /* section Listen() - listen() parameter: define
-                                   waiting queue size */
-  char BUFFER[1024]; /* section Read() - read() parameter: store request string
-                      */
-  char RESPONSE[1024];
-  char SERVER_IP[INET_ADDRSTRLEN]; /* section Bind() - inet_ntop() parameter:
-                                      store sever ip address */
-  char CLIENT_IP[INET_ADDRSTRLEN]; /* section Accept() - inet_ntop() parameter:
-                                      store client ip address */
+  const int BACKLOG_SIZE = 100;    /* Listen(): define waiting queue size */
+  char BUFFER[1024];               /* Read(): store request string */
+  char RESPONSE[1024];             /* Write(): store response string */
+  char SERVER_IP[INET_ADDRSTRLEN]; /* Write(): store ip address of server*/
+  char CLIENT_IP[INET_ADDRSTRLEN]; /* Write(): store ip address of client */
+  //
 
   // Socket()
   int server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -41,29 +45,34 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     perror("Server socket creation error!");
     return -1;
   }
+  //
 
   // Bind()
-  in_addr_t server_ip =
-      inet_addr(bind_ip); /* Convert ip address from String to Binary. */
+  /* convert ip from String to Binary */
+  in_addr_t server_ip = inet_addr(bind_ip);
   if (server_ip == -1) {
     perror("ip address converting error!");
     return -1;
   }
 
-  struct sockaddr_in
-      server_addr; /* Initialize sockaddr_in structure for bind() function. */
+  /* initialize server address structure */
+  struct sockaddr_in server_addr;
+
   socklen_t server_addrlen = sizeof(server_addr);
   memset(&server_addr, 0, server_addrlen);
+
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(port);
   server_addr.sin_addr.s_addr = server_ip;
 
+  /* actual bind function */
   int server_bind =
       bind(server_socket, (struct sockaddr *)&server_addr, server_addrlen);
   if (server_bind == -1) {
     perror("Binding error!");
     return -1;
   }
+  //
 
   // Listen()
   int server_listen = listen(server_socket, BACKLOG_SIZE);
@@ -71,24 +80,63 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     perror("Listen error!");
     return -1;
   }
+  //
 
   // Accept()
+  /* initialize client address structure */
   struct sockaddr_in client_addr;
-  socklen_t client_addrlen = sizeof(client_addr);
 
+  /* use while-loop to handle multiple clients */
   while (true) {
+    socklen_t client_addrlen = sizeof(client_addr);
 
+    /* actual accept function */
     int client_socket =
         accept(server_socket, (struct sockaddr *)&client_addr, &client_addrlen);
     if (client_socket == -1) {
       perror("Accept error!");
       return -1;
     }
+    //
 
+    // Read()
+    /* initialize BUFFER array */
+    memset(&BUFFER, 0, sizeof(BUFFER));
+
+    /* actual read function */
+    ssize_t read_bytes = read(client_socket, BUFFER, sizeof(BUFFER));
+    if (read_bytes == -1) {
+      perror("Read error!");
+      return -1;
+    }
+    // print function to visualize input strings
+    // std::cout << BUFFER << "//";
+    //
+
+    // Getsockname() & Getpeername()
+    int server_info = getsockname(
+        client_socket, (struct sockaddr *)&server_addr, &server_addrlen);
+    if (server_info == -1) {
+      perror("Getsockname error!");
+      return -1;
+    }
     int peer_info = getpeername(client_socket, (struct sockaddr *)&client_addr,
                                 &client_addrlen);
     if (peer_info == -1) {
       perror("Getpeername error!");
+      return -1;
+    }
+    //
+
+    // Write()
+    /* initialize RESPONSE array */
+    memset(&RESPONSE, 0, sizeof(RESPONSE));
+
+    /* get ip address of server & client, convert them to String and store */
+    const char *server_ipaddr = inet_ntop(AF_INET, &(server_addr.sin_addr),
+                                          SERVER_IP, sizeof(SERVER_IP));
+    if (server_ipaddr == NULL) {
+      perror("can't get server's ip address!");
       return -1;
     }
     const char *client_ipaddr = inet_ntop(AF_INET, &(client_addr.sin_addr),
@@ -98,53 +146,33 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
       return -1;
     }
 
-    int server_info = getsockname(
-        server_socket, (struct sockaddr *)&server_addr, &server_addrlen);
-    if (server_info == -1) {
-      perror("Getsockname error!");
-      return -1;
-    }
-    const char *server_ipaddr = inet_ntop(AF_INET, &(server_addr.sin_addr),
-                                          SERVER_IP, sizeof(SERVER_IP));
-    if (server_ipaddr == NULL) {
-      perror("can't get server's ip address!");
-      return -1;
-    }
-
-    // Read()
-    memset(&BUFFER, 0, sizeof(BUFFER));
-    ssize_t read_bytes = read(client_socket, BUFFER, sizeof(BUFFER));
-    if (read_bytes == -1) {
-      perror("Read error!");
-      return -1;
-    }
-
-    BUFFER[strlen(BUFFER) + 1] = 0;
-    submitAnswer(CLIENT_IP, BUFFER);
-
-    // Write()
-    memset(&RESPONSE, 0, sizeof(RESPONSE));
+    /* handle 3 special requests, else just echo back */
     if (strcmp("hello", BUFFER) == 0) {
       strcpy(RESPONSE, server_hello);
-    }
-
-    else if (strcmp("whoami", BUFFER) == 0) {
+    } else if (strcmp("whoami", BUFFER) == 0) {
       strcpy(RESPONSE, CLIENT_IP);
-    }
-
-    else if (strcmp("whoru", BUFFER) == 0) {
+    } else if (strcmp("whoru", BUFFER) == 0) {
       strcpy(RESPONSE, SERVER_IP);
-    }
-
-    else {
+    } else {
       strcpy(RESPONSE, BUFFER);
     }
 
+    /* add new line character at the end of response string */
     RESPONSE[strlen(RESPONSE) + 1] = '\n';
-    if (write(client_socket, RESPONSE, strlen(RESPONSE) + 2) == -1) {
-      perror("Write error - client side!");
+
+    /* actual write function */
+    ssize_t written_bytes = write(client_socket, RESPONSE, strlen(RESPONSE));
+    if (written_bytes == -1) {
+      perror("Write error - server side!");
       return -1;
     }
+    //
+
+    // SubmitAnswer()
+    /* add null terminator at the end of BUFFER */
+    BUFFER[strlen(BUFFER) + 1] = 0;
+    submitAnswer(CLIENT_IP, BUFFER);
+    //
   }
 
   // CLose()
@@ -152,11 +180,7 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     perror("Close error - server socket!");
     return -1;
   }
-
-  // Your server code
-  // !IMPORTANT: do not use global variables and do not define/use functions
-  // !IMPORTANT: for all system calls, when an error happens, your program must
-  // return. e.g., if an read() call return -1, return -1 for serverMain.
+  //
 
   return 0;
 }
@@ -164,9 +188,14 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
 int EchoAssignment::clientMain(const char *server_ip, int port,
                                const char *command) {
 
+  // Your client code
+  // !IMPORTANT: do not use global variables and do not define/use functions
+  // !IMPORTANT: for all system calls, when an error happens, your program must
+  // return. e.g., if an read() call return -1, return -1 for clientMain.
+
   // Local variables
   char BUFFER[1024];
-  char COMMAND[strlen(command) + 2];
+  //
 
   // Socket()
   int client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -174,59 +203,67 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
     perror("Client socket creation error!");
     return -1;
   }
+  //
 
   // Connect()
-  in_addr_t binary_server_ip =
-      inet_addr(server_ip); /* Convert ip address from String to Binary. */
+  /* convert ip from String to Binary */
+  in_addr_t binary_server_ip = inet_addr(server_ip);
   if (binary_server_ip == -1) {
     perror("ip address converting error!");
     return -1;
   }
 
-  struct sockaddr_in
-      server_addr; /* Initialize sockaddr_in structure for bind() function. */
+  /* initialize server address structure */
+  struct sockaddr_in server_addr;
+
   socklen_t server_addrlen = sizeof(server_addr);
   memset(&server_addr, 0, server_addrlen);
+
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(port);
   server_addr.sin_addr.s_addr = binary_server_ip;
 
+  /* actual connet function */
   int client_connect =
       connect(client_socket, (const sockaddr *)&server_addr, server_addrlen);
   if (client_connect == -1) {
     perror("Connect error!");
     return -1;
   }
+  //
 
   // Write()
-  memset(&COMMAND, 0, sizeof(COMMAND));
-  strcpy(COMMAND, command);
-  COMMAND[strlen(command) + 1] = '\n';
-  if (write(client_socket, COMMAND, sizeof(COMMAND)) == -1) {
+  ssize_t written_bytes = write(client_socket, command, strlen(command));
+  if (written_bytes == -1) {
     perror("Write error - client side!");
     return -1;
   }
+  //
 
   // Read()
+  /* initialize BUFFER array */
   memset(&BUFFER, 0, sizeof(BUFFER));
-  if (read(client_socket, BUFFER, sizeof(BUFFER)) == -1) {
+
+  /* actual read function */
+  ssize_t read_bytes = read(client_socket, BUFFER, sizeof(BUFFER));
+  if (read_bytes == -1) {
     perror("Read error - client side!");
     return -1;
   }
+  //
 
+  // SubmitAnswer()
+  /* add null terminator at the end of BUFFER */
   BUFFER[strlen(BUFFER) + 1] = 0;
   submitAnswer(server_ip, BUFFER);
+  //
 
   // CLose()
   if (close(client_socket) == -1) {
     perror("Close error - client socket!");
     return -1;
   }
-
-  // Your client code
-  // !IMPORTANT: do not use global variables and do not define/use functions
-  // !IMPORTANT: for all system calls, when an error happens, your program must
-  // return. e.g., if an read() call return -1, return -1 for clientMain.
+  //
 
   return 0;
 }
