@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include <arpa/inet.h>
+#include <iostream>
 
 // !IMPORTANT: allowed system calls.
 // !DO NOT USE OTHER NETWORK SYSCALLS (send, recv, select, poll, epoll, fork
@@ -28,12 +29,14 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
   // !IMPORTANT: do not use global variables and do not define/use functions
   // !IMPORTANT: for all system calls, when an error happens, your program must
   // return. e.g., if an read() call return -1, return -1 for serverMain.
+
   // Local variables
-  const int BACKLOG_SIZE = 100;        /* Listen(): define waiting queue size */
-  std::vector<char> BUFFER(1024, 0);   /* Read(): store request string */
-  std::vector<char> RESPONSE(1024, 0); /* Write(): store response string */
-  char SERVER_IP[INET_ADDRSTRLEN];     /* Write(): store ip address of server*/
-  char CLIENT_IP[INET_ADDRSTRLEN];     /* Write(): store ip address of client */
+  const int BACKLOG_SIZE = 100; /* Listen(): define waiting queue size */
+  const int HELLO_SIZE = std::strlen(server_hello);
+  std::vector<char> BUFFER(1024);   /* Read(): store request string */
+  std::vector<char> RESPONSE(1024); /* Write(): store response string */
+  char SERVER_IP[INET_ADDRSTRLEN];  /* Write(): store ip address of server*/
+  char CLIENT_IP[INET_ADDRSTRLEN];  /* Write(): store ip address of client */
   //
 
   // Socket()
@@ -87,6 +90,11 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
   while (true) {
     socklen_t client_addrlen = sizeof(client_addr);
 
+    BUFFER.resize(1024);
+    BUFFER.assign(BUFFER.size(), 0);
+    RESPONSE.resize(1024);
+    RESPONSE.assign(RESPONSE.size(), 0);
+
     /* actual accept function */
     int client_socket =
         accept(server_socket, (struct sockaddr *)&client_addr, &client_addrlen);
@@ -99,9 +107,12 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     // Read()
     ssize_t read_bytes = read(client_socket, BUFFER.data(), BUFFER.size());
     if (read_bytes == -1) {
-      perror("Read error!");
+      perror("Read error - serverside!");
       return -1;
     }
+    BUFFER.resize(read_bytes);
+    std::string BUFFER_STRING(BUFFER.data(), read_bytes);
+    //
 
     // Getsockname() & Getpeername()
     int server_info = getsockname(
@@ -134,25 +145,25 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     }
 
     /* handle 3 special requests, else just echo back */
-    std::string hello = "hello";
-    std::string whoami = "whoami";
-    std::string whoru = "whoru";
-
-    if (strcmp(BUFFER.data(), hello.c_str()) == 0) {
-      std::strncpy(RESPONSE.data(), server_hello, RESPONSE.size() - 1);
-    } else if (strcmp(BUFFER.data(), whoami.c_str()) == 0) {
-      std::strncpy(RESPONSE.data(), CLIENT_IP, RESPONSE.size() - 1);
-    } else if (strcmp(BUFFER.data(), whoru.c_str()) == 0) {
-      std::strncpy(RESPONSE.data(), SERVER_IP, RESPONSE.size() - 1);
+    if (BUFFER_STRING == "hello") {
+      RESPONSE.resize(HELLO_SIZE);
+      std::strncpy(RESPONSE.data(), server_hello, RESPONSE.size());
+    } else if (BUFFER_STRING == "whoami") {
+      RESPONSE.resize(INET_ADDRSTRLEN);
+      std::strncpy(RESPONSE.data(), CLIENT_IP, RESPONSE.size());
+    } else if (BUFFER_STRING == "whoru") {
+      RESPONSE.resize(INET_ADDRSTRLEN);
+      std::strncpy(RESPONSE.data(), SERVER_IP, RESPONSE.size());
     } else {
-      std::strncpy(RESPONSE.data(), BUFFER.data(), RESPONSE.size() - 1);
+      RESPONSE.resize(read_bytes);
+      std::strncpy(RESPONSE.data(), BUFFER.data(), RESPONSE.size());
     }
 
     /* actual write function */
     ssize_t written_bytes =
-        write(client_socket, RESPONSE.data(), std::strlen(RESPONSE.data()));
+        write(client_socket, RESPONSE.data(), RESPONSE.size());
     if (written_bytes == -1) {
-      perror("Write error - server side!");
+      perror("Write error - serverside!");
       return -1;
     }
     //
@@ -161,12 +172,17 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     submitAnswer(CLIENT_IP, BUFFER.data());
     //
 
-    BUFFER.assign(BUFFER.size(), 0);
+    // CLose()
+    if (close(client_socket) == -1) {
+      perror("Close error - serverside client socket");
+      return -1;
+    }
+    //
   }
 
   // CLose()
   if (close(server_socket) == -1) {
-    perror("Close error - server socket!");
+    perror("Close error - serverside server socket!");
     return -1;
   }
   //
@@ -224,7 +240,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   // Write()
   ssize_t written_bytes = write(client_socket, command, strlen(command));
   if (written_bytes == -1) {
-    perror("Write error - client side!");
+    perror("Write error - clientside!");
     return -1;
   }
   //
@@ -232,7 +248,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   // Read()
   ssize_t read_bytes = read(client_socket, BUFFER.data(), BUFFER.size());
   if (read_bytes == -1) {
-    perror("Read error - client side!");
+    perror("Read error - clientside!");
     return -1;
   }
   //
@@ -243,7 +259,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
 
   // CLose()
   if (close(client_socket) == -1) {
-    perror("Close error - client socket!");
+    perror("Close error - clientside client socket!");
     return -1;
   }
   //
