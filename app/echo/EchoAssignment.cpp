@@ -6,8 +6,6 @@
 
 #include <arpa/inet.h>
 
-// #include <iostream>
-
 // !IMPORTANT: allowed system calls.
 // !DO NOT USE OTHER NETWORK SYSCALLS (send, recv, select, poll, epoll, fork
 // etc.)
@@ -30,13 +28,12 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
   // !IMPORTANT: do not use global variables and do not define/use functions
   // !IMPORTANT: for all system calls, when an error happens, your program must
   // return. e.g., if an read() call return -1, return -1 for serverMain.
-
   // Local variables
-  const int BACKLOG_SIZE = 100;    /* Listen(): define waiting queue size */
-  char BUFFER[1024];               /* Read(): store request string */
-  char RESPONSE[1024];             /* Write(): store response string */
-  char SERVER_IP[INET_ADDRSTRLEN]; /* Write(): store ip address of server*/
-  char CLIENT_IP[INET_ADDRSTRLEN]; /* Write(): store ip address of client */
+  const int BACKLOG_SIZE = 100;        /* Listen(): define waiting queue size */
+  std::vector<char> BUFFER(1024, 0);   /* Read(): store request string */
+  std::vector<char> RESPONSE(1024, 0); /* Write(): store response string */
+  char SERVER_IP[INET_ADDRSTRLEN];     /* Write(): store ip address of server*/
+  char CLIENT_IP[INET_ADDRSTRLEN];     /* Write(): store ip address of client */
   //
 
   // Socket()
@@ -94,24 +91,17 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     int client_socket =
         accept(server_socket, (struct sockaddr *)&client_addr, &client_addrlen);
     if (client_socket == -1) {
-      perror("Accept error!");
+      perror("Message: client connection terminated");
       return -1;
     }
     //
 
     // Read()
-    /* initialize BUFFER array */
-    memset(&BUFFER, 0, sizeof(BUFFER));
-
-    /* actual read function */
-    ssize_t read_bytes = read(client_socket, BUFFER, sizeof(BUFFER));
+    ssize_t read_bytes = read(client_socket, BUFFER.data(), BUFFER.size());
     if (read_bytes == -1) {
       perror("Read error!");
       return -1;
     }
-    // print function to visualize input strings
-    // std::cout << BUFFER << "//";
-    //
 
     // Getsockname() & Getpeername()
     int server_info = getsockname(
@@ -143,22 +133,24 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
       return -1;
     }
 
-    /* initialize RESPONSE array */
-    memset(&RESPONSE, 0, sizeof(RESPONSE));
-
     /* handle 3 special requests, else just echo back */
-    if (strcmp("hello", BUFFER) == 0) {
-      strcpy(RESPONSE, server_hello);
-    } else if (strcmp("whoami", BUFFER) == 0) {
-      strcpy(RESPONSE, CLIENT_IP);
-    } else if (strcmp("whoru", BUFFER) == 0) {
-      strcpy(RESPONSE, SERVER_IP);
+    std::string hello = "hello";
+    std::string whoami = "whoami";
+    std::string whoru = "whoru";
+
+    if (strcmp(BUFFER.data(), hello.c_str()) == 0) {
+      std::strncpy(RESPONSE.data(), server_hello, RESPONSE.size() - 1);
+    } else if (strcmp(BUFFER.data(), whoami.c_str()) == 0) {
+      std::strncpy(RESPONSE.data(), CLIENT_IP, RESPONSE.size() - 1);
+    } else if (strcmp(BUFFER.data(), whoru.c_str()) == 0) {
+      std::strncpy(RESPONSE.data(), SERVER_IP, RESPONSE.size() - 1);
     } else {
-      strcpy(RESPONSE, BUFFER);
+      std::strncpy(RESPONSE.data(), BUFFER.data(), RESPONSE.size() - 1);
     }
 
     /* actual write function */
-    ssize_t written_bytes = write(client_socket, RESPONSE, strlen(RESPONSE));
+    ssize_t written_bytes =
+        write(client_socket, RESPONSE.data(), std::strlen(RESPONSE.data()));
     if (written_bytes == -1) {
       perror("Write error - server side!");
       return -1;
@@ -166,10 +158,10 @@ int EchoAssignment::serverMain(const char *bind_ip, int port,
     //
 
     // SubmitAnswer()
-    /* add null terminator at the end of BUFFER */
-    BUFFER[strlen(BUFFER) + 1] = 0;
-    submitAnswer(CLIENT_IP, BUFFER);
+    submitAnswer(CLIENT_IP, BUFFER.data());
     //
+
+    BUFFER.assign(BUFFER.size(), 0);
   }
 
   // CLose()
@@ -191,7 +183,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   // return. e.g., if an read() call return -1, return -1 for clientMain.
 
   // Local variables
-  char BUFFER[1024];
+  std::vector<char> BUFFER(1024, 0);
   //
 
   // Socket()
@@ -238,11 +230,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   //
 
   // Read()
-  /* initialize BUFFER array */
-  memset(&BUFFER, 0, sizeof(BUFFER));
-
-  /* actual read function */
-  ssize_t read_bytes = read(client_socket, BUFFER, sizeof(BUFFER));
+  ssize_t read_bytes = read(client_socket, BUFFER.data(), BUFFER.size());
   if (read_bytes == -1) {
     perror("Read error - client side!");
     return -1;
@@ -250,9 +238,7 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   //
 
   // SubmitAnswer()
-  /* add null terminator at the end of BUFFER */
-  BUFFER[strlen(BUFFER) + 1] = 0;
-  submitAnswer(server_ip, BUFFER);
+  submitAnswer(server_ip, BUFFER.data());
   //
 
   // CLose()
