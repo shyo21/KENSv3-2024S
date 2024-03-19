@@ -226,8 +226,8 @@ int EchoAssignment::clientMain(const char *server_ip, int port,
   server_addr.sin_addr.s_addr = binary_server_ip;
 
   /* actual connet function */
-  int client_connect =
-      connect(client_socket, (const sockaddr *)&server_addr, server_addrlen);
+  int client_connect = connect(
+      client_socket, (const struct sockaddr *)&server_addr, server_addrlen);
   if (client_connect == -1) {
     // perror("Connect error!");
     return -1;
