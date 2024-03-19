@@ -532,6 +532,7 @@ TEST_F(EchoTesting, ManytoOneAll) {
   runTest();
   checkTest(true);
 }
+
 TEST_F(EchoTesting, ManytoMany) {
   SetUp(
       {
