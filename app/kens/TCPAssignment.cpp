@@ -119,7 +119,6 @@ void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
 };
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
-
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     this->returnSystemCall(syscallUUID, -1);
@@ -149,7 +148,6 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
 void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
                                  const struct sockaddr *addr,
                                  socklen_t addrlen) {
-
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     this->returnSystemCall(syscallUUID, -1);
