@@ -16,7 +16,28 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 
+// Additional Header
+#include <iostream>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+
 namespace E {
+
+/*Basic descripter for socket state info*/
+enum class SocketState { CLOSED, CREATED, BOUND, LISTENING };
+
+/*Basic socket information*/
+struct Socket {
+  int domain;   /*AF_INET*/
+  int type;     /*SOCK_STREAM*/
+  int protocol; /*IPPROTO_TCP*/
+  SocketState socketstate;
+};
+struct SocketData {
+  Socket socket;
+  sockaddr_in *sockAddr;
+};
 
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
@@ -24,6 +45,9 @@ class TCPAssignment : public HostModule,
                       public TimerModule {
 private:
   virtual void timerCallback(std::any payload) final;
+
+  std::unordered_map<int, std::unordered_map<int, SocketData>> socketMap;
+  std::set<std::tuple<uint32_t, in_port_t>> boundSet;
 
 public:
   TCPAssignment(Host &host);
@@ -35,6 +59,11 @@ protected:
   virtual void systemCallback(UUID syscallUUID, int pid,
                               const SystemCallParameter &param) final;
   virtual void packetArrived(std::string fromModule, Packet &&packet) final;
+
+  // Add
+  void syscall_socket(UUID, int, int, int, int);
+  void syscall_close(UUID, int, int);
+  void syscall_bind(UUID, int, int, const struct sockaddr *, socklen_t);
 };
 
 class TCPAssignmentProvider {
