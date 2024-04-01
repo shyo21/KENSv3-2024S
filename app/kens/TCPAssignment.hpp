@@ -18,6 +18,7 @@
 
 // Additional Header
 #include <iostream>
+#include <queue>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -25,7 +26,7 @@
 namespace E {
 
 /*Basic descripter for socket state info*/
-enum class SocketState { CLOSED, CREATED, BOUND, LISTENING };
+enum class SocketState { CLOSED, CREATED, CONNECTED, BOUND, LISTENING };
 
 /*Basic socket information*/
 struct Socket {
@@ -37,8 +38,16 @@ struct Socket {
 struct SocketData {
   Socket socket;
   sockaddr_in *sockAddr;
+  SocketHandShake socketHandShake;
 };
-
+struct SocketHandShake {
+  // listening queue
+  std::queue<std::tuple<int, uint32_t>> listeningQueue;
+  // backlogsize
+  int BACKLOG = -1;
+  // connect fd, addr
+  std::tuple<int, uint32_t> connectedTuple = std::make_tuple(-1, -1);
+};
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
                       public SystemCallInterface,
@@ -64,6 +73,10 @@ protected:
   void syscall_socket(UUID, int, int, int, int);
   void syscall_close(UUID, int, int);
   void syscall_bind(UUID, int, int, const struct sockaddr *, socklen_t);
+  void syscall_getsockname(UUID, int, int, struct sockaddr *, socklen_t *);
+  void syscall_listen(UUID, int, int, int);
+  void syscall_connect(UUID, int, int, const struct sockaddr *, socklen_t);
+  void syscall_accept(UUID, int, int, const struct sockaddr *, socklen_t);
 };
 
 class TCPAssignmentProvider {
