@@ -26,7 +26,7 @@
 namespace E {
 
 /*Basic descripter for socket state info*/
-enum class SocketState { CLOSED, CREATED, CONNECTED, BOUND, LISTENING };
+enum class SocketState { CLOSED, CREATED, CONNECTED, BOUND, WAITING,LISTENING };
 
 /*Basic socket information*/
 struct Socket {
@@ -58,6 +58,7 @@ private:
 
   std::unordered_map<int, std::unordered_map<int, struct SocketData>> socketMap;
   std::set<std::tuple<uint32_t, in_port_t>> boundSet;
+  std::set<std::tuple<int,uint32_t,in_port_t>> listeningSet;
 
 public:
   TCPAssignment(Host &host);
@@ -77,7 +78,8 @@ protected:
   void syscall_getsockname(UUID, int, int, struct sockaddr *, socklen_t *);
   void syscall_listen(UUID, int, int, int);
   void syscall_connect(UUID, int, int, const struct sockaddr *, socklen_t);
-  void syscall_accept(UUID, int, int, const struct sockaddr *, socklen_t *);
+  void syscall_accept(UUID, int, int, struct sockaddr *, socklen_t *);
+  void syscall_getpeername(UUID, int, int, struct sockaddr *, socklen_t *);
 };
 
 class TCPAssignmentProvider {
