@@ -35,19 +35,20 @@ struct Socket {
   int protocol; /*IPPROTO_TCP*/
   SocketState socketstate;
 };
-struct SocketData {
-  Socket socket;
-  sockaddr_in *sockAddr;
-  SocketHandShake socketHandShake;
-};
 struct SocketHandShake {
   // listening queue
-  std::queue<std::tuple<int, uint32_t>> listeningQueue;
+  std::queue<std::tuple<int, const struct sockaddr_in *>> listeningQueue;
   // backlogsize
   int BACKLOG = -1;
   // connect fd, addr
-  std::tuple<int, uint32_t> connectedTuple = std::make_tuple(-1, -1);
+  std::tuple<int, const struct sockaddr_in *> connectedTuple;
 };
+struct SocketData {
+  struct Socket socket;
+  struct sockaddr_in *sockAddr;
+  struct SocketHandShake socketHandShake;
+};
+
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
                       public SystemCallInterface,
@@ -55,7 +56,7 @@ class TCPAssignment : public HostModule,
 private:
   virtual void timerCallback(std::any payload) final;
 
-  std::unordered_map<int, std::unordered_map<int, SocketData>> socketMap;
+  std::unordered_map<int, std::unordered_map<int, struct SocketData>> socketMap;
   std::set<std::tuple<uint32_t, in_port_t>> boundSet;
 
 public:
@@ -76,7 +77,7 @@ protected:
   void syscall_getsockname(UUID, int, int, struct sockaddr *, socklen_t *);
   void syscall_listen(UUID, int, int, int);
   void syscall_connect(UUID, int, int, const struct sockaddr *, socklen_t);
-  void syscall_accept(UUID, int, int, const struct sockaddr *, socklen_t);
+  void syscall_accept(UUID, int, int, const struct sockaddr *, socklen_t *);
 };
 
 class TCPAssignmentProvider {
