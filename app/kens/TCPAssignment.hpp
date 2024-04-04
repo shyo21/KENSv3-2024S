@@ -26,7 +26,17 @@
 namespace E {
 
 /*Basic descripter for socket state info*/
-enum class SocketState { CLOSED, CREATED, CONNECTED, BOUND, WAITING,LISTENING };
+enum class SocketState {
+  CLOSED,
+  CREATED,
+  BOUND,
+  LISTENING,
+  SYN_SENT,
+  SYN_RCV,
+  SYNACK_SENT,
+  ACK_RCV,
+  CONNECTED,
+};
 
 /*Basic socket information*/
 struct Socket {
@@ -49,6 +59,9 @@ struct SocketData {
   struct SocketHandShake socketHandShake;
 };
 
+const int IP_DATAGRAM_START = 14;
+const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
+
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
                       public SystemCallInterface,
@@ -58,7 +71,7 @@ private:
 
   std::unordered_map<int, std::unordered_map<int, struct SocketData>> socketMap;
   std::set<std::tuple<uint32_t, in_port_t>> boundSet;
-  std::set<std::tuple<int,uint32_t,in_port_t>> listeningSet;
+  std::set<std::tuple<int, uint32_t, in_port_t>> handShakingSet;
 
 public:
   TCPAssignment(Host &host);
@@ -72,6 +85,13 @@ protected:
   virtual void packetArrived(std::string fromModule, Packet &&packet) final;
 
   // Add
+  void getSrcIP(Packet *, uint32_t *);
+  void getDestIP(Packet *, uint32_t *);
+  void getSrcPort(Packet *, uint16_t *);
+  void getDestPort(Packet *, uint16_t *);
+  void getFlags(Packet *, uint8_t *);
+  std::tuple<int, int> getFd(uint32_t, in_port_t);
+
   void syscall_socket(UUID, int, int, int, int);
   void syscall_close(UUID, int, int);
   void syscall_bind(UUID, int, int, const struct sockaddr *, socklen_t);

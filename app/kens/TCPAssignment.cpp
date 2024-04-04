@@ -89,9 +89,132 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid,
   }
 }
 
+void TCPAssignment::getSrcIP(Packet *packet, uint32_t *ipaddr) {
+  packet->readData(IP_DATAGRAM_START + 12, ipaddr, 4);
+}
+
+void TCPAssignment::getDestIP(Packet *packet, uint32_t *ipaddr) {
+  packet->readData(IP_DATAGRAM_START + 16, ipaddr, 4);
+}
+
+void TCPAssignment::getSrcPort(Packet *packet, uint16_t *port) {
+  packet->readData(TCP_SEGMENT_START, port, 2);
+}
+
+void TCPAssignment::getDestPort(Packet *packet, uint16_t *port) {
+  packet->readData(TCP_SEGMENT_START + 2, port, 2);
+}
+
+void TCPAssignment::getFlags(Packet *packet, uint8_t *flag) {
+  packet->readData(TCP_SEGMENT_START + 13, flag, 1);
+}
+
 void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
-  // Remove below
-  
+  uint32_t srcIP, destIP;
+  uint16_t srcPort, destPort;
+  uint8_t flags;
+
+  // 패킷에서 필요한 정보 추출
+  getSrcIP(&packet, &srcIP);
+  getSrcPort(&packet, &srcPort);
+  getDestIP(&packet, &destIP);
+  getDestPort(&packet, &destPort);
+  getFlags(&packet, &flags);
+
+  // SEQ, ACK Number
+  uint32_t seqNum;
+  uint32_t ackNum;
+
+  bool SYN = flags & (1 << 1); // SYN 플래그 검사
+  bool ACK = flags & (1 << 4); // ACK 플래그 검사
+
+  // SYN 패킷 처리 (클라이언트로부터의 연결 요청) / SYN_RCV
+  if (SYN && !ACK) {
+    // 나((ip,port):상태, ack, seq),상대방(ip,port):상태, ack, seq
+    // tuple(tuple(ip,port,socketstate, int, int),tuple(ip,port, socketstate,
+    // int, int))
+
+    // 처음 syn 받으면 ack = seq+1, seq = random number
+
+    // syn 패킷을 받은놈(dest ip dest port) << 얘가 listen()중이고, 우리
+    // sockMap에 있는놈인가?
+
+    // 새로운 SYN-ACK 패킷 생성 및 초기 설정
+    // cloning -> different UUID
+    Packet synAckPacket = packet.clone();
+    // destport and srcport exchange
+    synAckPacket.writeData(TCP_SEGMENT_START, &destPort, 2);
+    synAckPacket.writeData(TCP_SEGMENT_START + 2, &srcPort, 2);
+
+    // dest IP src Ip exchange
+    synAckPacket.writeData(IP_DATAGRAM_START + 12, &destIP, 4);
+    synAckPacket.writeData(IP_DATAGRAM_START + 16, &srcIP, 4);
+
+    // ACK 번호 설정(받은 SEQ number + 1)
+    ackNum = seqNum + 1;
+    // SEQ number
+    seqNum =
+        // sequence number - 따로 지정
+        synAckPacket.writeData(TCP_SEGMENT_START + 4, &seqNum, 4);
+    // ACK number - 받은 seq number +1
+    synAckPacket.writeData(TCP_SEGMENT_START + 8, &ackNum, 2);
+
+    // SYN 및 ACK 플래그 설정
+    flags = (1 << 1) | (1 << 4); // SYN-ACK
+    synAckPacket.writeData(13, &flags, 1);
+
+    // SYN-ACK 패킷 송신
+    this->sendPacket("IPv4", std::move(synAckPacket));
+  }
+
+  // SYN-ACK에 대한 ACK 패킷 처리 /
+  if (ACK && !SYN) {
+    // 연결 확립 처리
+    // 예: 클라이언트 소켓의 상태를 CONNECTED로 변경
+    // 이전 연결에 대해 보냈던 SEQnum + 1 과 같다면 listening set에 요청 fd 입력
+    if (ackNum ==) {
+      // clientFd 찾기
+      int clientPid, clientFd = -1;
+      std::tuple<int, int>(clientPid, clientFd) = getFd(srcIP, srcPort);
+      if (clientFd == -1 || clientPid == -1) {
+        perror("established. But clientFd not found");
+        return;
+      }
+      // make client socket state CONNECTED
+      socketMap[clientPid][clientFd].socket.socketstate =
+          SocketState::CONNECTED;
+      // peer 찾기
+      int peerPid, peerFd = -1;
+      std::tuple<int, int>(clientPid, clientFd) = getFd(destIP, destPort);
+      if (peerFd == -1 || peerPid == -1) {
+        perror("established. But serverFd not found");
+        return;
+      }
+      // peer 의 listeningsocket의 listening queue 에 입력하기.
+      socketMap[peerPid][peerFd].socketHandShake.listeningQueue.push(
+          std::make_tuple(clientFd, socketMap[clientPid][clientFd].sockAddr));
+    }
+  }
+}
+
+std::tuple<int, int> TCPAssignment::getFd(uint32_t saddr, in_port_t sinport) {
+  int targetFd = -1;
+  int targetPid = -1;
+  for (const auto &pidIter : socketMap) {
+    for (const auto &fdIter : pidIter.second) {
+      if (((fdIter.second.sockAddr->sin_addr.s_addr == saddr) ||
+           (fdIter.second.sockAddr->sin_addr.s_addr == INADDR_ANY)) &&
+          (fdIter.second.sockAddr->sin_port == sinport)) {
+        targetFd = fdIter.first;
+        targetPid = pidIter.first;
+        break;
+      }
+    }
+    if (targetFd != -1) {
+      break;
+    }
+  }
+  return std::make_tuple(targetFd, targetPid);
 }
 
 void TCPAssignment::timerCallback(std::any payload) {
@@ -205,40 +328,39 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
 void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int fd,
                                         struct sockaddr *addr,
                                         socklen_t *addrlen) {
-  //SocketMap에 없는 pid에서 getsockname을 호출하면 오류
+  // SocketMap에 없는 pid에서 getsockname을 호출하면 오류
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  //주소를 찾으려는 fd가 socketMap에 없다면 오류
+  // 주소를 찾으려는 fd가 socketMap에 없다면 오류
   auto sockIter = pidIter->second.find(fd);
   if (sockIter == pidIter->second.end()) {
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  //socketMap에서 fd에 해당하는 socketData 찾음
+  // socketMap에서 fd에 해당하는 socketData 찾음
   SocketData &mySocketData = sockIter->second;
-  //addrlen 이 유효한지 확인, 
+  // addrlen 이 유효한지 확인,
   if (*addrlen < sizeof(sockaddr_in)) {
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  //addr이 유효한지 확인, nullptr이면 안 됨.
-  if(addr == nullptr){
+  // addr이 유효한지 확인, nullptr이면 안 됨.
+  if (addr == nullptr) {
     this->returnSystemCall(syscallUUID, -1);
-    return;    
+    return;
   }
-    //sockAddr이 바인드 되지 않았거나 sockAddr 이 init 되지 않음.
-  if (mySocketData.sockAddr == nullptr || mySocketData.socket.socketstate !=SocketState::BOUND ) {
+  // sockAddr이 바인드 되지 않았거나 sockAddr 이 init 되지 않음.
+  if (mySocketData.sockAddr == nullptr ||
+      mySocketData.socket.socketstate != SocketState::BOUND) {
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
   struct sockaddr_in *mySockAddr = (struct sockaddr_in *)(addr);
   *mySockAddr = *mySocketData.sockAddr;
   *addrlen = sizeof(sockaddr_in);
-
-
 
   this->returnSystemCall(syscallUUID, 0);
 }
@@ -256,9 +378,9 @@ void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int fd,
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  //fd에 해당하는 SocketData 찾음.
+  // fd에 해당하는 SocketData 찾음.
   SocketData &mysocketData = sockIter->second;
-  //socketstate가 bound가 아닐 경우 리턴.
+  // socketstate가 bound가 아닐 경우 리턴.
   //
   if (mysocketData.socket.socketstate != SocketState::BOUND) {
     this->returnSystemCall(syscallUUID, -1);
@@ -266,24 +388,27 @@ void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int fd,
   }
 
   mysocketData.socket.socketstate = SocketState::LISTENING;
-  //backlog 조건, 0<=backlog<=SOMAXCONN(max length of backlog(128))
-  if(backlog>SOMAXCONN){
+  // backlog 조건, 0<=backlog<=SOMAXCONN(max length of backlog(128))
+  if (backlog > SOMAXCONN) {
     backlog = SOMAXCONN;
   }
-  if(backlog<0){
+  if (backlog < 0) {
     backlog = 0;
   }
   mysocketData.socketHandShake.BACKLOG = backlog;
-  listeningSet.insert(std::make_tuple(fd,mysocketData.sockAddr->sin_addr.s_addr,mysocketData.sockAddr->sin_port));
+  listeningSet.insert(std::make_tuple(fd,
+                                      mysocketData.sockAddr->sin_addr.s_addr,
+                                      mysocketData.sockAddr->sin_port));
 
-  std::cout<<"inserted listening server: "<<listeningSet.empty()<<std::endl;
+  std::cout << "inserted listening server: " << listeningSet.empty()
+            << std::endl;
   this->returnSystemCall(syscallUUID, 0);
 }
 
 void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
                                     const struct sockaddr *addr,
                                     socklen_t addrlen) {
-  
+
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     this->returnSystemCall(syscallUUID, -1);
@@ -295,12 +420,12 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  //fd에 해당하는 SocketData 찾음.
+  // fd에 해당하는 SocketData 찾음.
   SocketData &mySocketData = sockIter->second;
-  //유효한 소켓이 아닌 경우, CREATED 인 경우 오류
+  // 유효한 소켓이 아닌 경우, CREATED 인 경우 오류
 
-  //주소 길이값이 유효하지 않을 경우 오류
-  if(addrlen != sizeof(sockaddr_in)) {
+  // 주소 길이값이 유효하지 않을 경우 오류
+  if (addrlen != sizeof(sockaddr_in)) {
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
@@ -313,16 +438,17 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   in_port_t peerPort = peerAddr->sin_port;
   // checking func / check if addr - fd is LISTENING
   // peerFd : addr 주소를 가지는 서버fd socketMap에서 찾기
-  // 찾은 fd 값으로 해당 peer의 socketHandShake의 listening queue에 나의 fd와 주소정보 튜플 push하기
+  // 찾은 fd 값으로 해당 peer의 socketHandShake의 listening queue에 나의 fd와
+  // 주소정보 튜플 push하기
 
-  std::cout<<"sival from outside"<<std::endl;
-  std::cout<<"checklisteningSet: "<<listeningSet.empty()<<std::endl;
+  std::cout << "sival from outside" << std::endl;
+  std::cout << "checklisteningSet: " << listeningSet.empty() << std::endl;
 
   int peerFd = -1;
-  for(const auto& iter: listeningSet) {
-    std::cout<<"sival"<<std::endl;
-    if((std::get<1>(iter)==INADDR_ANY)||(std::get<1>(iter)==peerIP)) {
-      if(std::get<2>(iter)==peerPort){
+  for (const auto &iter : listeningSet) {
+    std::cout << "sival" << std::endl;
+    if ((std::get<1>(iter) == INADDR_ANY) || (std::get<1>(iter) == peerIP)) {
+      if (std::get<2>(iter) == peerPort) {
         peerFd = std::get<0>(iter);
         break;
       }
@@ -334,17 +460,21 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
     return;
   }
   bool found = false;
-  for(const auto& pidIter:socketMap){
-    for(const auto& fdIter:pidIter.second){
-      std::cout << "connect queue push: " << pidIter.first << " // " << fdIter.first << std::endl;
-      if(fdIter.first == peerFd){
-        socketMap[pidIter.first][fdIter.first].socketHandShake.listeningQueue.push(std::tuple<int, const struct sockaddr_in *>(fd, mySocketData.sockAddr));
+  for (const auto &pidIter : socketMap) {
+    for (const auto &fdIter : pidIter.second) {
+      std::cout << "connect queue push: " << pidIter.first << " // "
+                << fdIter.first << std::endl;
+      if (fdIter.first == peerFd) {
+        socketMap[pidIter.first][fdIter.first]
+            .socketHandShake.listeningQueue.push(
+                std::tuple<int, const struct sockaddr_in *>(
+                    fd, mySocketData.sockAddr));
         perror("i found peerfd");
         found = true;
         break;
       }
     }
-    if(found==true){
+    if (found == true) {
       break;
     }
   }
@@ -354,10 +484,8 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   this->returnSystemCall(syscallUUID, 0);
 }
 
-
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
-                                   struct sockaddr *addr,
-                                   socklen_t *addrlen) {
+                                   struct sockaddr *addr, socklen_t *addrlen) {
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     std::cout << '1';
@@ -373,27 +501,26 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   }
 
   SocketData &mySocketData = sockIter->second;
-  std::cout << "accept: " << pidIter->first << " // " << sockIter->first << std::endl;
+  std::cout << "accept: " << pidIter->first << " // " << sockIter->first
+            << std::endl;
   if (mySocketData.socket.socketstate != SocketState::LISTENING) {
     std::cout << '3';
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  
+
   if (mySocketData.socketHandShake.listeningQueue.empty()) {
     std::cout << '4';
     returnSystemCall(syscallUUID, -1);
     return;
   }
 
-  std::tuple<int, const struct sockaddr_in *> request = 
+  std::tuple<int, const struct sockaddr_in *> request =
       mySocketData.socketHandShake.listeningQueue.front();
   mySocketData.socketHandShake.listeningQueue.pop();
-  
 
   // 이미 listening queue에 있던 소켓이 다른 소켓과 연결되어있다면 종료.
   // 이미 해당 request ip, port에 대해 serve중이면 종료.
-
 
   // 새 소켓 파일 디스크립터 생성 및 클라이언트와 연결
   int requestFd = std::get<0>(request);
@@ -420,7 +547,7 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
       std::tuple<int, const struct sockaddr_in *>(requestFd, requestAddr);
   struct SocketData newMySocketData = {newMySocket, newMySockAddr,
                                        newMySocketHandShake};
-  
+
   // sockethandshake connectedTuple에 peer정보넣기
 
   this->socketMap[pid][newMySockFd] = newMySocketData;
@@ -436,7 +563,9 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   this->returnSystemCall(syscallUUID, newMySockFd);
 }
 
-void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd, struct sockaddr *addr, socklen_t *addrlen) {
+void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd,
+                                        struct sockaddr *addr,
+                                        socklen_t *addrlen) {
   auto pidIter = this->socketMap.find(pid);
   if (pidIter == this->socketMap.end()) {
     this->returnSystemCall(syscallUUID, -1);
@@ -456,8 +585,10 @@ void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd, struc
     return;
   }
 
-  const struct sockaddr_in *peerAddr = std::get<1>(mySocketData.socketHandShake.connectedTuple);
-  if (peerAddr != nullptr && addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(sockaddr_in)) {
+  const struct sockaddr_in *peerAddr =
+      std::get<1>(mySocketData.socketHandShake.connectedTuple);
+  if (peerAddr != nullptr && addr != nullptr && addrlen != nullptr &&
+      *addrlen >= sizeof(sockaddr_in)) {
     memcpy(addr, peerAddr, sizeof(sockaddr_in));
     *addrlen = sizeof(sockaddr_in);
   } else {
