@@ -40,26 +40,22 @@ enum class SocketState {
   ESTABLISHED,
   CONNECTED,
 };
-
 /*Basic socket information*/
 struct Socket {
-  int domain;   /*AF_INET*/
-  int type;     /*SOCK_STREAM*/
-  int protocol; /*IPPROTO_TCP*/
-  SocketState socketstate;
-};
-struct SocketHandShake {
-  // listening queue
-  std::queue<std::tuple<int, const struct sockaddr_in *>> listeningQueue;
-  // backlogsize
-  int BACKLOG = -1;
-  // connect fd, addr
-  std::tuple<int, const struct sockaddr_in *> connectedTuple;
-};
-struct SocketData {
-  struct Socket socket;
-  struct sockaddr_in *sockAddr;
-  struct SocketHandShake socketHandShake;
+  int domain;       /*AF_INET*/
+  int type;         /*SOCK_STREAM*/
+  int protocol;     /*IPPROTO_TCP*/
+  int fd;           /*fd*/
+  int BACKLOG = -1; /*backlog size*/
+  // buffer
+
+  bool bound = false;      /*check if bound*/
+  SocketState socketState; /*sockstate*/
+
+  struct sockaddr_in *myAddr; /*addr*/
+  std::queue<struct Socket> *listeningQueue;
+  std::pair<struct Socket, struct Socket> *connectedPair;
+  std::pair<uint32_t, in_port_t> *ipportPair;
 };
 
 const int IP_DATAGRAM_START = 14;
@@ -71,18 +67,11 @@ class TCPAssignment : public HostModule,
                       public TimerModule {
 private:
   virtual void timerCallback(std::any payload) final;
-
-  std::unordered_map<int, std::unordered_map<int, struct SocketData>> socketMap;
-  std::set<std::tuple<uint32_t, in_port_t>> boundSet;
+  // pid : Sockets
+  std::unordered_map<int, struct Socket> socketMap;
   // my ip,port : state , peer ip, port, seq, ack
-  std::unordered_map<
-      // my ip port :
-      std::pair<uint32_t, in_port_t>,
-      std::unordered_map<
-          // peer ip port :
-          std::pair<uint16_t, in_port_t>,
-          // mystate, seq, ack
-          std::tuple<SocketState, uint32_t, uint32_t>>>
+  std::unordered_map<struct Socket,
+                     std::tuple<struct Socket, SocketState, int, int>>
       handShakingMap;
 
 public:

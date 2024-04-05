@@ -305,13 +305,11 @@ void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
   }
 
   struct Socket sock = {domain, type, protocol, SocketState::CREATED};
-  struct sockaddr_in *sockAddr = {};
-  struct SocketHandShake sockHandShake = {};
-  struct SocketData sockData = {sock, sockAddr, sockHandShake};
-  // pid 에 해당하는 fd, sockdata map이 없다면 추가하기
-  if (socketMap.find(pid) == this->socketMap.end()) {
-    socketMap[pid] = std::unordered_map<int, SocketData>();
-  }
+  struct SocketHandShake sockHandShake = {
+      std::queue<std::tuple<int, const struct sockaddr_in *>>(), -1,
+      std::make_tuple(-1, nullptr)};
+  struct SocketData sockData = {sock, nullptr, sockHandShake};
+
   socketMap[pid][sockFd] = sockData;
   this->returnSystemCall(syscallUUID, sockFd);
 };
