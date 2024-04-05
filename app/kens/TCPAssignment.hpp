@@ -19,6 +19,7 @@
 // Additional Header
 #include <iostream>
 #include <queue>
+#include <random>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -30,11 +31,13 @@ enum class SocketState {
   CLOSED,
   CREATED,
   BOUND,
+  WAITING,
   LISTENING,
   SYN_SENT,
   SYN_RCV,
-  SYNACK_SENT,
+  SYNACK_RCV,
   ACK_RCV,
+  ESTABLISHED,
   CONNECTED,
 };
 
@@ -71,7 +74,16 @@ private:
 
   std::unordered_map<int, std::unordered_map<int, struct SocketData>> socketMap;
   std::set<std::tuple<uint32_t, in_port_t>> boundSet;
-  std::set<std::tuple<int, uint32_t, in_port_t>> handShakingSet;
+  // my ip,port : state , peer ip, port, seq, ack
+  std::unordered_map<
+      // my ip port :
+      std::pair<uint32_t, in_port_t>,
+      std::unordered_map<
+          // peer ip port :
+          std::pair<uint16_t, in_port_t>,
+          // mystate, seq, ack
+          std::tuple<SocketState, uint32_t, uint32_t>>>
+      handShakingMap;
 
 public:
   TCPAssignment(Host &host);
@@ -90,6 +102,9 @@ protected:
   void getSrcPort(Packet *, uint16_t *);
   void getDestPort(Packet *, uint16_t *);
   void getFlags(Packet *, uint8_t *);
+  void setPacketSrcDest(Packet *, uint32_t *, uint16_t *, uint32_t *,
+                        uint16_t *);
+
   std::tuple<int, int> getFd(uint32_t, in_port_t);
 
   void syscall_socket(UUID, int, int, int, int);
