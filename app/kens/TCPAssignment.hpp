@@ -45,17 +45,16 @@ struct Socket {
   int domain;       /*AF_INET*/
   int type;         /*SOCK_STREAM*/
   int protocol;     /*IPPROTO_TCP*/
+  int pid;          /*pid*/
   int fd;           /*fd*/
   int BACKLOG = -1; /*backlog size*/
-  // buffer
 
-  bool bound = false;      /*check if bound*/
+  // bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
-  struct sockaddr_in *myAddr; /*addr*/
-  std::queue<struct Socket> *listeningQueue;
-  std::pair<struct Socket, struct Socket> *connectedPair;
-  std::pair<uint32_t, in_port_t> *ipportPair;
+  struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
+  std::queue<std::pair<uint32_t, in_port_t>> listeningQueue;
+  std::pair<uint32_t, in_port_t> connectedPair;
 };
 
 const int IP_DATAGRAM_START = 14;
@@ -68,10 +67,11 @@ class TCPAssignment : public HostModule,
 private:
   virtual void timerCallback(std::any payload) final;
   // pid : Sockets
-  std::unordered_map<int, struct Socket> socketMap;
+  std::set<struct Socket *> socketSet;
   // my ip,port : state , peer ip, port, seq, ack
-  std::unordered_map<struct Socket,
-                     std::tuple<struct Socket, SocketState, int, int>>
+  std::unordered_map<
+      std::pair<uint32_t, in_port_t>,
+      std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>>
       handShakingMap;
 
 public:
@@ -94,7 +94,8 @@ protected:
   void setPacketSrcDest(Packet *, uint32_t *, uint16_t *, uint32_t *,
                         uint16_t *);
 
-  std::tuple<int, int> getFd(uint32_t, in_port_t);
+  struct Socket *getSocket(std::pair<uint32_t, in_port_t>);
+  void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
   void syscall_close(UUID, int, int);
