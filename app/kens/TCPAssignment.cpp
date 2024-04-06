@@ -214,7 +214,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     ackPacket.writeData(TCP_SEGMENT_START + 8, &ackNum, 2);
     // ACK 플래그 설정
     flags = (1 << 4); // ACK
-    ackPacket.writeData(13, &flags, 1);
+    ackPacket.writeData(TCP_SEGMENT_START + 13, &flags, 1);
     // timer 설정하기
     // payload 어떻게??? packet, ip, port, state?
 
@@ -291,41 +291,44 @@ void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
     this->returnSystemCall(syscallUUID, -1);
   }
 
-  int fd = createFileDescriptor(pid);
-  if (fd < 0) {
+  int myfd = createFileDescriptor(pid);
+  if (myfd < 0) {
     this->returnSystemCall(syscallUUID, -1);
   }
 
-  Socket *newSocket = new Socket();
-  newSocket->domain = domain;
-  newSocket->type = type;
-  newSocket->protocol = protocol;
-  newSocket->pid = pid;
-  newSocket->fd = fd;
-  newSocket->socketState = SocketState::CREATED;
-
   // socket map에 이미 해당 pid set에 소켓 있으면 에러
   for (const auto &setIter : socketSet) {
-    if (setIter->pid == pid && setIter->fd == fd) {
-      printf("same pid, same fd socket already exist in set");
+    if (setIter->pid == pid && setIter->fd == myfd) {
+      printf("socket(): socket with same pid&fd exists\n");
       this->returnSystemCall(syscallUUID, -1);
       return;
     }
   }
 
+  Socket *newSocket = new Socket;
+  newSocket->domain = domain;
+  newSocket->type = type;
+  newSocket->protocol = protocol;
+  newSocket->pid = pid;
+  newSocket->fd = myfd;
+  newSocket->socketState = SocketState::CREATED;
+
   socketSet.insert(newSocket);
-  this->returnSystemCall(syscallUUID, fd);
+
+  this->returnSystemCall(syscallUUID, myfd);
 }
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
   struct Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
-    if (setIter->pid == pid && setIter->fd == fd)
+    if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
-    break;
+      break;
+    }
   }
 
   if (mySocket == nullptr) {
+    printf("close(): cannot find socket\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
@@ -348,41 +351,59 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
   }
   // 만약 소켓맵에서 못 찾는다면 에러
   if (mySocket == nullptr) {
-    printf("no matching socket in bind");
+    printf("bind(): cannot find socket\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
   // socketState가 created 가 아니라면 에러
   if (mySocket->socketState != SocketState::CREATED) {
-    printf("socketstate not created");
+    printf("bind(): invalid socket state\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
   // addrlen not matching
   if (addrlen != sizeof(*addr)) {
-    printf("addrlen not matching");
+    printf("bind(): invalid addrlen\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
 
   struct sockaddr_in *toBindAddr = (sockaddr_in *)(addr);
+  in_addr_t toBindIP = toBindAddr->sin_addr.s_addr;
+  in_port_t toBindPort = toBindAddr->sin_port;
 
   for (const auto &setIter : socketSet) {
     if (setIter->myAddr == nullptr) {
       continue;
-    } else {
-      if ((setIter->myAddr->sin_addr.s_addr == INADDR_ANY) ||
-          (setIter->myAddr->sin_addr.s_addr == toBindAddr->sin_addr.s_addr) &&
-              (setIter->myAddr->sin_port == toBindAddr->sin_port)) {
-        // error!!
-        printf("the addr already BOUNDED");
+    }
+    if (setIter->socketState == SocketState::BOUND ||
+        setIter->socketState == SocketState::CONNECTED) {
+
+      if (setIter->fd == fd) {
+        printf("bind(): fd already BOUND\n");
         this->returnSystemCall(syscallUUID, -1);
         return;
+
+      } else {
+        in_addr_t iterIP = setIter->myAddr->sin_addr.s_addr;
+        in_port_t iterPort = setIter->myAddr->sin_port;
+
+        if (iterPort == toBindPort) {
+          if ((iterIP == INADDR_ANY || toBindIP == INADDR_ANY ||
+               iterIP == toBindIP)) {
+            printf("bind(): addr already BOUND\n");
+            this->returnSystemCall(syscallUUID, -1);
+            return;
+          }
+        }
       }
     }
   }
 
-  mySocket->myAddr = toBindAddr;
+  mySocket->myAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  memcpy(mySocket->myAddr, toBindAddr, sizeof(sockaddr_in));
+  mySocket->socketState = SocketState::BOUND;
+
   this->returnSystemCall(syscallUUID, 0);
 }
 
@@ -398,33 +419,34 @@ void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int fd,
   }
   // 만약 소켓맵에서 못 찾는다면 에러
   if (mySocket == nullptr) {
-    printf("no matching socket in bind");
+    printf("getsock(): cannot find socket\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
   // addrlen 이 유효한지 확인,
   if (*addrlen < sizeof(sockaddr_in)) {
-    printf("invalid addrlen in getsockname");
+    printf("getsock(): invalid addrlen\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
 
   // addr이 유효한지 확인, nullptr이면 안 됨.
   if (addr == nullptr) {
-    printf("invalid addr in getsockname");
+    printf("getsock(): invalid addr\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
   // sockAddr이 바인드 되지 않았거나 sockAddr 이 init 되지 않음.
   if (mySocket->myAddr == nullptr ||
       mySocket->socketState != SocketState::BOUND) {
-    printf("invalid socket state");
+    printf("getsock(): invalid socket state\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
+
   struct sockaddr_in *mySockAddr = (struct sockaddr_in *)(addr);
-  *mySockAddr = *mySocket->myAddr;
-  *addrlen = sizeof(sockaddr_in);
+  memcpy(mySockAddr, mySocket->myAddr, sizeof(struct sockaddr_in));
+  *addrlen = sizeof(struct sockaddr_in);
 
   this->returnSystemCall(syscallUUID, 0);
 }
