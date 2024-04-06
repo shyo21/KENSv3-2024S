@@ -271,8 +271,8 @@ void TCPAssignment::deleteSocket(struct Socket *socket) {
   if (socket == nullptr)
     return;
 
-  if (socket->myAddr != nullptr)
-    delete socket->myAddr;
+  // if (socket->myAddr != nullptr)
+  //   delete socket->myAddr;
 
   while (!socket->listeningQueue.empty())
     socket->listeningQueue.pop();
@@ -291,29 +291,30 @@ void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
     this->returnSystemCall(syscallUUID, -1);
   }
 
-  int sockFd = createFileDescriptor(pid);
-  if (sockFd < 0) {
+  int fd = createFileDescriptor(pid);
+  if (fd < 0) {
     this->returnSystemCall(syscallUUID, -1);
   }
 
-  struct Socket *sock;
-  sock->domain = domain;
-  sock->type = type;
-  sock->protocol = protocol;
-  sock->pid = pid;
-  sock->fd = sockFd;
-  sock->socketState = SocketState::CREATED;
+  Socket *newSocket = new Socket();
+  newSocket->domain = domain;
+  newSocket->type = type;
+  newSocket->protocol = protocol;
+  newSocket->pid = pid;
+  newSocket->fd = fd;
+  newSocket->socketState = SocketState::CREATED;
 
   // socket map에 이미 해당 pid set에 소켓 있으면 에러
   for (const auto &setIter : socketSet) {
-    if (setIter->pid == pid && setIter->fd == sockFd) {
+    if (setIter->pid == pid && setIter->fd == fd) {
       printf("same pid, same fd socket already exist in set");
       this->returnSystemCall(syscallUUID, -1);
       return;
     }
   }
-  socketSet.insert(sock);
-  this->returnSystemCall(syscallUUID, sockFd);
+
+  socketSet.insert(newSocket);
+  this->returnSystemCall(syscallUUID, fd);
 }
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
