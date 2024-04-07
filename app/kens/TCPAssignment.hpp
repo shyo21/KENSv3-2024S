@@ -49,7 +49,7 @@ struct Socket {
   int fd;           /*fd*/
   int BACKLOG = -1; /*backlog size*/
 
-  // bool bound = false;      /*check if bound*/
+  bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
   struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
@@ -86,13 +86,12 @@ protected:
   virtual void packetArrived(std::string fromModule, Packet &&packet) final;
 
   // Add
-  void getSrcIP(Packet *, uint32_t *);
-  void getDestIP(Packet *, uint32_t *);
-  void getSrcPort(Packet *, uint16_t *);
-  void getDestPort(Packet *, uint16_t *);
-  void getFlags(Packet *, uint8_t *);
-  void setPacketSrcDest(Packet *, uint32_t *, uint16_t *, uint32_t *,
-                        uint16_t *);
+  uint32_t getSrcIP(Packet *);
+  uint32_t getDestIP(Packet *);
+  uint16_t getSrcPort(Packet *);
+  uint16_t getDestPort(Packet *);
+  uint8_t getFlags(Packet *);
+  void setPacketSrcDest(Packet *, uint32_t, uint16_t, uint32_t, uint16_t);
 
   struct Socket *getSocket(std::pair<uint32_t, in_port_t>);
   void deleteSocket(struct Socket *);
