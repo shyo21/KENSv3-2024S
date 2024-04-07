@@ -124,8 +124,8 @@ void TCPAssignment::setPacketSrcDest(Packet *packet, uint32_t srcIP,
                                      uint16_t destPort) {
   uint32_t nSrcIP = htonl(srcIP);
   uint32_t nDestIP = htonl(destIP);
-  uint16_t nSrcPort = htonl(srcPort);
-  uint16_t nDestPort = htonl(destPort);
+  uint16_t nSrcPort = htons(srcPort);
+  uint16_t nDestPort = htons(destPort);
 
   packet->writeData(IP_DATAGRAM_START + 12, &nSrcIP, 4);
   packet->writeData(IP_DATAGRAM_START + 16, &nDestIP, 4);
@@ -170,7 +170,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   // flag가 어떤 상태인지 확인
   bool isSYN = flags & (1 << 1);
   bool isACK = flags & (1 << 4);
-
+  std::cout << std::bitset<8>(flags) << std::endl;
   // 플래그가 SYN인 경우 - 클라이언트로부터의 연결 요청
   if (isSYN && !isACK) {
     /* 이미 syn을 받은 적이 있는지 확인 syn 패킷을 받은놈(dest ip dest
@@ -204,6 +204,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     // SEQ 번호를 생성한 랜덤 넘버로 설정
     hSeq = distrib(gen);
     nSeq = htonl(hSeq);
+
     // 내 state SYN_RCV로 만들고 seq, ack 설정
     handShakingMap[destAddrPair] =
         std::make_tuple(srcAddrPair, SocketState::SYN_RCV, -1, hSeq + 1);
@@ -213,7 +214,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     uint8_t dataOffset = 5 << 4;
     synAckPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
 
-    uint16_t windowSize = htons(65535);
+    uint16_t windowSize = htons(51200);
     synAckPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
     synAckPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
     synAckPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
@@ -570,28 +571,34 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   in_port_t peerPort = peerAddr->sin_port;
   auto peerPair = std::make_pair(peerIP, peerPort);
 
-  // ip 계층에서 내가 사용할 NIC ip와 port 획득
-  ipv4_t peerIPReform =
+  /* uint32_t 형식의 IP를 ipv4_t로 변환한 후 getRoutingTable()을 통해 내가
+   * 사용하는 port 번호 획득 */
+  ipv4_t peerIPv4 =
       NetworkUtil::UINT64ToArray<sizeof(uint32_t)>((uint64_t)peerIP);
-  int myNICPortReform = getRoutingTable(peerIPReform);
-  std::optional<ipv4_t> myNICIPOption = getIPAddr(myNICPortReform);
-  ipv4_t myNICIPReform;
-  if (myNICIPOption.has_value()) {
-    myNICIPReform = myNICIPOption.value();
+  int myPortInt = getRoutingTable(peerIPv4);
+
+  /* 얻어낸 port를 이용해 ipv4_t 형식의 내 주소 획득 */
+  std::optional<ipv4_t> myIPOption = getIPAddr(myPortInt);
+  ipv4_t myIPv4;
+  if (myIPOption.has_value()) {
+    myIPv4 = myIPOption.value();
   } else {
+    printf("connect(): cannot find my IP\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  uint32_t myNICIP = NetworkUtil::arrayToUINT64(myNICIPReform);
-  uint16_t myNICPort = static_cast<std::uint16_t>(myNICPortReform);
-  auto myPair = std::make_pair(myNICIP, myNICPort);
+
+  /* 획득한 ip와 port 알맞은 형식으로 변환 */
+  uint32_t myIP = NetworkUtil::arrayToUINT64(myIPv4);
+  uint16_t myPort = static_cast<uint16_t>(myPortInt);
+  auto myPair = std::make_pair(myIP, myPort);
 
   // 발송할 새로운 SYN packet 생성
   size_t PACKETHEADER_SIZE = 54;
   Packet synPacket(PACKETHEADER_SIZE);
 
   // packet 초기화
-  setPacketSrcDest(&synPacket, myNICIP, myNICPort, peerIP, peerPort);
+  setPacketSrcDest(&synPacket, myIP, myPort, peerIP, peerPort);
 
   // 난수 생성기를 이용한 seqNum 생성
   std::random_device rd;
@@ -607,11 +614,11 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   uint8_t synFlag = 1 << 1;
   synPacket.writeData(TCP_SEGMENT_START + 13, &synFlag, 1);
 
-  uint16_t windowSize = htons(65535);
+  uint16_t windowSize = htons(51200);
   synPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
 
   // timer 설정
-  // this->sendPacket("IPv4", std::move(synPacket));
+  this->sendPacket("IPv4", std::move(synPacket));
 
   /* handshakingMap { pair(내 ip, port) } ->
    * { tuple( pair(내 ip, port), 내 상태, seqnum, acknum) } */
@@ -619,8 +626,8 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
       std::make_tuple(peerPair, SocketState::SYN_SENT, -1, hSeq + 1);
   // socketMap의 fd 의 sockaddr 설정
   mySocket->myAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
-  mySocket->myAddr->sin_addr.s_addr = myNICIP;
-  mySocket->myAddr->sin_port = myNICPort;
+  mySocket->myAddr->sin_addr.s_addr = myIP;
+  mySocket->myAddr->sin_port = myPort;
   mySocket->myAddr->sin_family = AF_INET;
 
   mySocket->socketState = SocketState::WAITING;
@@ -631,35 +638,36 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
                                    struct sockaddr *addr, socklen_t *addrlen) {
-  // SocketMap에 없는 pid에서 을 호출하면 오류
+  /* 입력받은  pid와 fd를 가진 소켓 탐색 - 해당 소켓은 LISTENING 상태여야 함*/
   struct Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
     }
   }
-  // 만약 소켓맵에서 못 찾는다면 에러
+
   if (mySocket == nullptr) {
     printf("accept() : socket not found\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  // socket은  listening상태여야함
+
   if (mySocket->socketState != SocketState::LISTENING) {
     printf("accept() : socket not listening\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  // std::cout << mySocket->listeningQueue.empty() << std::endl;
+
   //  listening queue에 아무도 없으면 에러
   if (mySocket->listeningQueue.empty()) {
+    printf("accept(): listeningqueue is empty\n");
     returnSystemCall(syscallUUID, -1);
     return;
   }
 
   std::pair<uint32_t, in_port_t> request = mySocket->listeningQueue.front();
   mySocket->listeningQueue.pop();
-  std::cout << std::get<0>(request) << std::endl;
+
   // 이미 listening queue에 있던 소켓이 다른 소켓과 연결되어있다면 종료.
   // 이미 해당 request ip, port에 대해 serve중이면 종료.
 

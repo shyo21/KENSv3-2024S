@@ -53,9 +53,9 @@ struct Socket {
   SocketState socketState; /*sockstate*/
 
   struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
-  std::queue<std::pair<uint32_t, in_port_t>> listeningQueue;
-  std::pair<uint32_t, in_port_t> connectedPair;
-};
+  std::queue<Packet *> listeningQueue;
+  std::queue<> acce;
+}
 
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
@@ -69,9 +69,8 @@ private:
   // pid : Sockets
   std::set<struct Socket *> socketSet;
   // my ip,port : state , peer ip, port, seq, ack
-  std::unordered_map<
-      std::pair<uint32_t, in_port_t>,
-      std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>>
+  std::unordered_map<std::pair<uint32_t, in_port_t>,
+                     std::tuple<SocketState, int, int>>
       handShakingMap;
 
 public:
