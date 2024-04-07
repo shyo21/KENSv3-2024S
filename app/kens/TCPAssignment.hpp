@@ -54,7 +54,8 @@ struct Socket {
 
   struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
   std::queue<Packet *> listeningQueue;
-  std::queue<> acce;
+  std::queue<> acceptQueue;
+  // queue - pid, fd, myaddr, peerAddr -
 }
 
 const int IP_DATAGRAM_START = 14;

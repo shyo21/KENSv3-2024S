@@ -206,8 +206,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     nSeq = htonl(hSeq);
 
     // 내 state SYN_RCV로 만들고 seq, ack 설정
-    handShakingMap[destAddrPair] =
-        std::make_tuple(srcAddrPair, SocketState::SYN_RCV, -1, hSeq + 1);
+    handShakingMap[destAddrPair][srcAddrPair] =
+        std::make_tuple(SocketState::SYN_RCV, -1, hSeq + 1);
 
     // 패킷에 필요한 정보 써넣기
 
@@ -282,15 +282,14 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     // 이전 연결에 대해 보냈던 SEQnum + 1 과 같다면 listening set에 fd,
     // sockadddr 추가 , handshakingMap - established  추가 추가 클라이언트
     // 소켓의 상태를 CONNECTED로 변경
-    std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>
-        toDealTuple;
+    std::tuple<SocketState, int, int> toDealTuple;
     auto myIter = handShakingMap.find(destAddrPair);
     // 내가 보냈던 syn 패킷에 대한 답장이 맞다면
-    //
-    if (myIter != handShakingMap.end()) {
-      if ((std::get<3>(myIter->second) == hAck) &&
-          (std::get<1>(myIter->second) == SocketState::SYN_SENT)) {
-        toDealTuple = myIter->second;
+    auto peerIter = handShakingMap.find(srcAddrPair);
+    if (peerIter != handShakingMap.end()) {
+      if ((std::get<2>(peerIter->second) == hAck) &&
+          (std::get<0>(peerIter->second) == SocketState::SYN_SENT)) {
+        toDealTuple = peerIter->second;
       }
     } else {
       printf("No match SYN_RCV pair");
