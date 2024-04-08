@@ -46,18 +46,20 @@ struct Socket {
 
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
+  uint32_t expectedAck;
 
   struct sockaddr_in *myAddr = nullptr;        /*Bindaddr*/
   struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
-  // listening 중인 packet *
-  std::queue<Packet *> listeningQueue;
+  // listening 중인 packet
+  std::queue<Packet> listeningQueue;
   // pid 내 소켓 addr, 상대 소켓 addr -- ??
-  std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *, int>>
+  std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *>>
       acceptQueue;
 };
 
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
+const int FIN = 1;
 const int SYN = 2;
 const int ACK = 16;
 
@@ -71,10 +73,6 @@ private:
   virtual void timerCallback(std::any payload) final;
   // pid : Sockets
   std::set<struct Socket *> socketSet;
-  // my ip,port : state , peer ip, port, seq, ack
-  std::unordered_map<std::pair<uint32_t, in_port_t>,
-                     std::tuple<SocketState, int, int>>
-      handShakingMap;
   // pid uuid - 소켓 포인터 / <소켓 포인터 , uuid>
   std::set<std::tuple<struct Socket *, UUID, struct sockaddr *, socklen_t *>>
       blockedProcessHandler;
@@ -85,25 +83,21 @@ public:
   virtual void finalize();
   virtual ~TCPAssignment();
 
-protected:
-  virtual void systemCallback(UUID syscallUUID, int pid,
-                              const SystemCallParameter &param) final;
-  virtual void packetArrived(std::string fromModule, Packet &&packet) final;
-
   // Add
   uint32_t getSrcIP(Packet *);
   uint32_t getDestIP(Packet *);
   uint16_t getSrcPort(Packet *);
   uint16_t getDestPort(Packet *);
-  uint8_t getFlags(Packet *);
+  uint8_t getFlag(Packet *);
 
   void setPacketSrcDest(Packet *, uint32_t, uint16_t, uint32_t, uint16_t);
-  struct Socket *getSocket(std::pair<uint32_t, in_port_t>);
+  struct Socket *getSocket(std::pair<uint32_t, in_port_t>,
+                           std::pair<uint32_t, in_port_t>);
 
   void handleSYNSent(Packet *, struct Socket *);
   void handleListening(Packet *, struct Socket *);
   void handleSYNRcvd(Packet *, struct Socket *);
-
+  void handleEstab(Packet *, struct Socket *);
   void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
@@ -114,6 +108,11 @@ protected:
   void syscall_connect(UUID, int, int, const struct sockaddr *, socklen_t);
   void syscall_accept(UUID, int, int, struct sockaddr *, socklen_t *);
   void syscall_getpeername(UUID, int, int, struct sockaddr *, socklen_t *);
+
+protected:
+  virtual void systemCallback(UUID syscallUUID, int pid,
+                              const SystemCallParameter &param) final;
+  virtual void packetArrived(std::string fromModule, Packet &&packet) final;
 };
 
 class TCPAssignmentProvider {
