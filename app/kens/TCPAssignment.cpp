@@ -133,6 +133,25 @@ void TCPAssignment::setPacketSrcDest(Packet *packet, uint32_t srcIP,
   packet->writeData(TCP_SEGMENT_START + 2, &nDestPort, 2);
 }
 
+struct Socket *
+TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> addrPair) {
+  struct Socket *mySocket = nullptr;
+  for (const auto &setIter : socketSet) {
+    uint32_t iterIP = setIter->myAddr->sin_addr.s_addr;
+    in_port_t iterPort = setIter->myAddr->sin_port;
+
+    if (iterPort == std::get<1>(addrPair)) {
+
+      if ((iterIP == std::get<0>(addrPair)) || (iterIP == INADDR_ANY) ||
+          (std::get<0>(addrPair) == INADDR_ANY)) {
+        std::cout << "socket found" << std::endl;
+        mySocket = setIter;
+      }
+    }
+  }
+  return mySocket;
+}
+
 void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
   uint16_t srcPort, destPort;
@@ -150,41 +169,40 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   hSeq = ntohl(nSeq);
   hAck = ntohl(nAck);
 
-  // uint32_t printsrcip = htonl(srcIP);
-  // char printstrsrcip[INET_ADDRSTRLEN];
-  // inet_ntop(AF_INET, &printsrcip, printstrsrcip, INET_ADDRSTRLEN);
-
-  // uint32_t printdestip = htonl(destIP);
-  // char printstrdestip[INET_ADDRSTRLEN];
-  // inet_ntop(AF_INET, &printdestip, printstrdestip, INET_ADDRSTRLEN);
-
-  // std::cout << "packetdata: " << printstrsrcip << "," << srcPort << "/"
-  //           << printstrdestip << "," << destPort << "/" <<
-  //           std::bitset<8>(flags)
-  //           << "/" << hSeq << "," << hAck << std::endl;
-
   std::pair<uint32_t, in_port_t> destAddrPair =
       std::make_pair(destIP, destPort);
   std::pair<uint32_t, in_port_t> srcAddrPair = std::make_pair(srcIP, srcPort);
 
   // flag가 어떤 상태인지 확인
-  bool isSYN = flags & (1 << 1);
-  bool isACK = flags & (1 << 4);
+  // bool isSYN = flags & (1 << 1);
+  // bool isACK = flags & (1 << 4);
 
+  // 소켓Set에서 해당 소켓 destpair를 이용해서 찾기
+  struct Socket *mySocket = getSocket(destAddrPair);
+  if (mySocket == nullptr) {
+    printf("packetArrived(): cannot find socket\n");
+    return;
+  }
+
+  // 해당 소켓의 state에 따라 함수를 호출하는 pattern matching
+  switch (mySocket->socketState) {
+  case SocketState::LISTENING:
+    this->handleListening(&packet, mySocket);
+    break;
+  case SocketState::SYN_SENT:
+    this->handleSYNSent(&packet, mySocket);
+    break;
+  case SocketState::SYN_RCVD:
+    this->handleSYNRcvd(&packet, mySocket);
+    break;
+  case SocketState::ESTABLISHED:
+    this->handleEstab(&packet, mySocket);
+    break;
+  }
   // 플래그가 SYN인 경우 - 클라이언트로부터의 연결 요청
   if (isSYN && !isACK) {
     /* 이미 syn을 받은 적이 있는지 확인 syn 패킷을 받은놈(dest ip dest
     port) << 얘가 listen()중이고, 우리 sockset에 있는놈인가? */
-    // struct Socket *mySocket = getSocket(destAddrPair);
-    // if (mySocket == nullptr) {
-    //   // printf("packet SYN: cannot find socket\n");
-    //   return;
-    // }
-
-    // if (mySocket->socketState != SocketState::LISTENING) {
-    //   printf("packet SYN: not LISTENING\n");
-    //   return;
-    // }
 
     //  SYN-ACK 패킷 생성: 기존의 패킷 클론
     size_t PACKETHEADER_SIZE = 54;
@@ -225,106 +243,276 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     //  SYN-ACK 패킷 송신
     this->sendPacket("IPv4", std::move(synAckPacket));
   }
+}
 
-  // SYN-ACK패킷 처리
-  if (isSYN && isACK) {
-    std::cout << "synack rcv" << std::endl;
-    std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>
-        toDealTuple;
-    auto myIter = handShakingMap.find(destAddrPair);
-    // 내가 보냈던 syn 패킷에 대한 답장이 맞다면
-    if (myIter != handShakingMap.end()) {
-      if ((std::get<3>(myIter->second) == hAck) &&
-          (std::get<1>(myIter->second) == SocketState::SYN_SENT)) {
-        toDealTuple = myIter->second;
-      }
-    } else {
-      printf("No match SYN_RCV pair");
-      return;
-    }
-    Packet ackPacket = packet.clone();
-    // destport and srcport exchange
-    setPacketSrcDest(&ackPacket, destIP, destPort, srcIP, srcPort);
-    hAck = hSeq + 1; // ACK 번호 설정(받은 SEQ number + 1)
-    nAck = htonl(nAck);
-    // SEQ number = randomnumber
-    // 난수 생성기 초기화
-    std::random_device rd; // 비결정적 난수 생성기를 사용하여 시드를 생성
-    std::mt19937 gen(rd()); // Mersenne Twister 알고리즘을 사용하는 생성기
-    // 1부터 1000까지의 균일 분포를 가진 난수 생성
+void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
+  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
+  uint16_t srcPort, destPort;
+  uint8_t flags;
+
+  // 패킷에서 필요한 정보 추출(host 형식)
+  srcIP = getSrcIP(packet);
+  srcPort = getSrcPort(packet);
+  destIP = getDestIP(packet);
+  destPort = getDestPort(packet);
+  flags = getFlags(packet);
+
+  packet->readData(TCP_SEGMENT_START + 4, &nSeq, 4); // seqNum
+  packet->readData(TCP_SEGMENT_START + 8, &nAck, 4); // ackNum
+  hSeq = ntohl(nSeq);
+  hAck = ntohl(nAck);
+
+  std::pair<uint32_t, in_port_t> destAddrPair =
+      std::make_pair(destIP, destPort);
+  std::pair<uint32_t, in_port_t> srcAddrPair = std::make_pair(srcIP, srcPort);
+
+  // if SYN RCVD
+  // else nothing?
+  if ((SYN & flags) & !(ACK & flags)) {
+    // socket -> synrcvd로
+    // 새 패킷 만들어서 synack 보내기
+    size_t PACKETHEADER_SIZE = 54;
+    Packet synAckPacket(PACKETHEADER_SIZE);
+    setPacketSrcDest(&synAckPacket, destIP, destPort, srcIP, srcPort);
+
+    // ACK 번호 설정(받은 SEQ number + 1)
+    hAck = hSeq + 1;
+    nAck = htonl(hAck);
+
+    /* 난수 생성기 - Morsenne Twiseter 알고리즘을 이용해 1~1000까지의 균일
+     * 분포를 가지는 난수를 생성한다 */
+    std::random_device rd;
+    std::mt19937 gen(rd());
     std::uniform_int_distribution<int> distrib(1, 1000);
+
+    // SEQ 번호를 생성한 랜덤 넘버로 설정
     hSeq = distrib(gen);
     nSeq = htonl(hSeq);
     // 내 state SYN_RCV로 만들고 seq, ack 설정
     handShakingMap[destAddrPair] =
-        std::make_tuple(srcAddrPair, SocketState::SYN_RCV, -1, hAck + 1);
-    // sequence number - 따로 지정
-    ackPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
-    // ACK number - 받은 seq number +1
-    ackPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
-    // ACK 플래그 설정
-    flags = (1 << 4); // ACK
-    ackPacket.writeData(TCP_SEGMENT_START + 13, &flags, 1);
-    // timer 설정하기
-    // payload 어떻게??? packet, ip, port, state?
+        std::make_tuple(srcAddrPair, SocketState::SYN_RCVD, -1, hSeq + 1);
 
-    // socketstate = connected, connectedPair = srcAddrPair
-    struct Socket *mySocket = getSocket(destAddrPair);
-    mySocket->socketState = SocketState::CONNECTED;
-    mySocket->connectedPair = srcAddrPair;
+    // 패킷에 필요한 정보 써넣기
+    uint8_t dataOffset = 5 << 4;
+    synAckPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
+
+    uint16_t windowSize = htons(65535);
+    synAckPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
+    synAckPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
+    synAckPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
+    flags = (1 << 1) | (1 << 4); // SYN-ACK
+    synAckPacket.writeData(TCP_SEGMENT_START + 13, &flags, 1);
+
+    /* TODO: Timer 설정하기 - payload 어떻게??? packet, ip, port, state? */
+
     //  SYN-ACK 패킷 송신
-    this->sendPacket("IPv4", std::move(ackPacket));
-  }
-  // ACK 패킷 처리 / handShakingMap에서 찾은 pair의 상태가 SYN_RCV여야함. ack ==
-  // seq+1이어야 함. established
-  if (!isSYN && isACK) {
-    // 이전 연결에 대해 보냈던 SEQnum + 1 과 같다면 listening set에 fd,
-    // sockadddr 추가 , handshakingMap - established  추가 추가 클라이언트
-    // 소켓의 상태를 CONNECTED로 변경
-    std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>
-        toDealTuple;
-    auto myIter = handShakingMap.find(destAddrPair);
-    // 내가 보냈던 syn 패킷에 대한 답장이 맞다면
-    //
-    if (myIter != handShakingMap.end()) {
-      if ((std::get<3>(myIter->second) == hAck) &&
-          (std::get<1>(myIter->second) == SocketState::SYN_SENT)) {
-        toDealTuple = myIter->second;
-      }
-    } else {
-      printf("No match SYN_RCV pair");
-      return;
-    }
-    // 내 listening중인 소켓을 찾아서 listeningqueue에 srcdestpair입력
-    struct Socket *mySocket = getSocket(destAddrPair);
+    this->sendPacket("IPv4", std::move(synAckPacket));
+    socket->socketState = SocketState::SYN_RCVD;
 
-    if (mySocket == nullptr) {
-      printf("no listening socket found in packet ack rcv");
-    } else {
-      mySocket->listeningQueue.push(srcAddrPair);
-      std::cout << "listing1uewew: " << mySocket->listeningQueue.empty()
-                << std::endl;
-    }
+  } else {
+    printf("packet arrived : listening state but not syn rcv");
+    return;
   }
 }
 
-struct Socket *
-TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> addrPair) {
-  struct Socket *mySocket = nullptr;
-  for (const auto &setIter : socketSet) {
-    uint32_t iterIP = setIter->myAddr->sin_addr.s_addr;
-    in_port_t iterPort = setIter->myAddr->sin_port;
+void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
+  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
+  uint16_t srcPort, destPort;
+  uint8_t flags;
 
-    if (iterPort == std::get<1>(addrPair)) {
+  // 패킷에서 필요한 정보 추출(host 형식)
+  srcIP = getSrcIP(packet);
+  srcPort = getSrcPort(packet);
+  destIP = getDestIP(packet);
+  destPort = getDestPort(packet);
+  flags = getFlags(packet);
 
-      if ((iterIP == std::get<0>(addrPair)) || (iterIP == INADDR_ANY) ||
-          (std::get<0>(addrPair) == INADDR_ANY)) {
-        std::cout << "socket found" << std::endl;
-        mySocket = setIter;
-      }
+  bool isSYN = flags & (1 << 1);
+  bool isACK = flags & (1 << 4);
+
+  packet->readData(TCP_SEGMENT_START + 4, &nSeq, 4); // seqNum
+  packet->readData(TCP_SEGMENT_START + 8, &nAck, 4); // ackNum
+  hSeq = ntohl(nSeq);
+  hAck = ntohl(nAck);
+
+  std::pair<uint32_t, in_port_t> destAddrPair =
+      std::make_pair(destIP, destPort);
+  std::pair<uint32_t, in_port_t> srcAddrPair = std::make_pair(srcIP, srcPort);
+
+  struct sockaddr_in *myAddr =
+      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  myAddr->sin_family = AF_INET;
+  myAddr->sin_addr.s_addr = destIP;
+  myAddr->sin_port = destPort;
+  struct sockaddr_in *peerAddr =
+      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  peerAddr->sin_family = AF_INET;
+  peerAddr->sin_addr.s_addr = srcIP;
+  peerAddr->sin_port = srcPort;
+
+  printf("handle synrcvd: synrcvd expected but else came");
+  return;
+
+  // 연속으로 syn 패킷이 들어오면? 소켓의 리스닝큐에 패킷을 일단 저장
+  // 첫번째 패킷 수신 후 accept들러서 backlog를 설정 해놓는다면?
+  // socket의 backlog 값보다 현재 리스닝큐의 사이즈가 작다면 패킷 추가
+  // backlog = 현재 3-way handshake중인 packet + 인 통신
+  if ((flags & SYN) && (flags & ACK)) {
+    if (socket->BACKLOG - 1 > socket->listeningQueue.size()) {
+      socket->listeningQueue.push(packet);
+      return;
+    } else {
+      // queue full - drop
+      return;
     }
   }
-  return mySocket;
+  // ack이 왔다면 무엇에 대한 ack일까
+  if (flags & ACK) {
+    // 만약 block된 accept 프로세스가 있다면 여기서 처리
+    if (!blockedProcessHandler.empty()) {
+      for (const auto &setIter : blockedProcessHandler) {
+        // block된 소켓 accept
+        UUID syscallUUID = std::get<1>(setIter);
+        int pid = std::get<0>(setIter)->pid;
+        struct Socket *mySocket = std::get<0>(setIter);
+        if ((std::get<0>(setIter)->pid == socket->pid) &&
+            std::get<0>(setIter)->fd == socket->fd) {
+          // 현재 내 소켓에 대해서 block된 process 존재
+          // 새로운 소켓을 만들어 요청 ip, port 와 연결
+          int newMySockFd =
+              createFileDescriptor(pid); // 가상의 파일 디스크립터 생성
+          if (newMySockFd < 0) {
+            this->returnSystemCall(syscallUUID,
+                                   -1); // 파일 디스크립터 생성 실패
+            return;
+          }
+          // 새 소켓을 클라이언트와 연결된 상태로 설정,
+          // 현재 나의 소켓과 socketstate, listeningqueue connected socket제외
+          // 모두동일
+          struct Socket *newMySocket = new Socket;
+          newMySocket->domain = mySocket->domain;
+          newMySocket->type = mySocket->type;
+          newMySocket->protocol = mySocket->protocol;
+          newMySocket->pid = mySocket->pid;
+          newMySocket->fd = newMySockFd;
+          newMySocket->socketState = SocketState::ESTABLISHED;
+          newMySocket->myAddr = mySocket->myAddr;
+          newMySocket->connectedAddr = peerAddr;
+
+          // 클라이언트 주소 정보를 사용자 공간에 복사
+          if (std::get<2>(setIter) != nullptr &&
+              *std::get<3>(setIter) >= sizeof(sockaddr_in) &&
+              myAddr != nullptr) {
+            memcpy(std::get<2>(setIter), myAddr, sizeof(sockaddr_in));
+            this->returnSystemCall(syscallUUID, newMySockFd);
+            return;
+          } else {
+            printf("synrcvd handle : invalid addr");
+            return;
+          }
+        }
+      }
+    } else {
+      // block된 친구가 없다면 accept에서 처리해줄것이야!
+      socket->acceptQueue.push(std::make_tuple(myAddr, peerAddr, socket->pid));
+    }
+  }
+  //
+  socket->socketState = SocketState::LISTENING;
+  if (!socket->listeningQueue.empty()) {
+    Packet *nextPacket = socket->listeningQueue.front();
+    packetArrived("IPv4", );
+  } else {
+    return;
+  }
+}
+
+void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
+  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
+  uint16_t srcPort, destPort;
+  uint8_t flags;
+
+  /* 패킷에서 필요한 정보 추출 - host 형식 */
+  srcIP = getSrcIP(packet);
+  srcPort = getSrcPort(packet);
+  destIP = getDestIP(packet);
+  destPort = getDestPort(packet);
+  flags = getFlags(packet);
+
+  (*packet).readData(TCP_SEGMENT_START + 4, &nSeq, 4); /* seqNum */
+  (*packet).readData(TCP_SEGMENT_START + 8, &nAck, 4); /* ackNum */
+  hSeq = ntohl(nSeq);
+  hAck = ntohl(nAck);
+
+  std::pair<uint32_t, in_port_t> destAddrPair =
+      std::make_pair(destIP, destPort);
+  std::pair<uint32_t, in_port_t> srcAddrPair = std::make_pair(srcIP, srcPort);
+
+  if (flags & SYN) {
+    /* ACK 패킷 생성 */
+    Packet ackPacket(PACKET_HEADER_SIZE);
+    setPacketSrcDest(&ackPacket, destIP, destPort, srcIP, srcPort);
+
+    /* ACK 번호 설정 - 받은 seqNum + 1 */
+    hAck = hSeq + 1;
+    nAck = htonl(hAck);
+
+    /* 난수 생성기 */
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> distrib(1, 1000);
+
+    /* seqNum 랜덤하게 설정 */
+    hSeq = distrib(gen);
+    nSeq = htonl(hSeq);
+
+    /* 기타 패킷 정보 작성 */
+    uint8_t dataOffset = 5 << 4;
+    ackPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
+
+    uint16_t windowSize = htons(65535);
+    ackPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
+
+    ackPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
+    ackPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
+
+    flags = ACK;
+    ackPacket.writeData(TCP_SEGMENT_START + 13, &flags, 1);
+
+    /* TODO: Timer 설정하기 - payload 어떻게??? packet, ip, port, state? */
+
+    /* ACK 패킷 송신 */
+    this->sendPacket("IPv4", std::move(ackPacket));
+
+    /* 내 소켓이 dest 소켓과 연결되었다는 정보 추가 */
+    socket->connectedAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+    memset(socket->connectedAddr, 0, sizeof(sockaddr_in));
+    socket->connectedAddr->sin_addr.s_addr = destIP;
+    socket->connectedAddr->sin_port = destPort;
+    socket->connectedAddr->sin_family = AF_INET;
+
+    /* simultaneous connection 처리 */
+    if (flags & ACK) {
+      socket->socketState = SocketState::ESTABLISHED;
+    } else {
+      socket->socketState = SocketState::SYN_SENT;
+    }
+
+    /* 내가 처리한게 blocked process인지 확인 */
+    auto blockedIter =
+        std::find_if(blockedProcessHandler.begin(), blockedProcessHandler.end(),
+                     [socket](const auto &blockedTuple) {
+                       return std::get<0>(blockedTuple) == socket;
+                     });
+    if (blockedIter != blockedProcessHandler.end()) {
+      this->returnSystemCall(std::get<1>(*blockedIter), 0);
+      blockedProcessHandler.erase(blockedIter);
+      return;
+    } else {
+      return;
+    }
+  }
+  return;
 }
 
 void TCPAssignment::deleteSocket(struct Socket *socket) {
@@ -631,35 +819,29 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
                                    struct sockaddr *addr, socklen_t *addrlen) {
-  // SocketMap에 없는 pid에서 을 호출하면 오류
+  // SocketMap에서 현재 pid 와 fd 를 가지는 소켓 포인터 찾기
   struct Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
     }
-  }
-  // 만약 소켓맵에서 못 찾는다면 에러
+  } // socket이 안 찾아지면 안 됨!
   if (mySocket == nullptr) {
     printf("accept() : socket not found\n");
     this->returnSystemCall(syscallUUID, -1);
     return;
   }
-  // socket은  listening상태여야함
-  if (mySocket->socketState != SocketState::LISTENING) {
-    printf("accept() : socket not listening\n");
-    this->returnSystemCall(syscallUUID, -1);
-    return;
-  }
-  // std::cout << mySocket->listeningQueue.empty() << std::endl;
-  //  listening queue에 아무도 없으면 에러
-  if (mySocket->listeningQueue.empty()) {
-    returnSystemCall(syscallUUID, -1);
+  // accept queue에 아무것도 없으면 일단 block
+  // blockHandler 에 정보 저장
+  if (mySocket->acceptQueue.empty()) {
+    blockedProcessHandler.insert(
+        std::make_tuple(mySocket, syscallUUID, addr, addrlen));
     return;
   }
 
-  std::pair<uint32_t, in_port_t> request = mySocket->listeningQueue.front();
+  std::tuple<struct sockaddr_in *, struct sockaddr_in *, int> request =
+      mySocket->acceptQueue.front();
   mySocket->listeningQueue.pop();
-  std::cout << std::get<0>(request) << std::endl;
   // 이미 listening queue에 있던 소켓이 다른 소켓과 연결되어있다면 종료.
   // 이미 해당 request ip, port에 대해 serve중이면 종료.
 
@@ -678,21 +860,14 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   newMySocket->protocol = mySocket->protocol;
   newMySocket->pid = mySocket->pid;
   newMySocket->fd = newMySockFd;
-  newMySocket->socketState = SocketState::CONNECTED;
+  newMySocket->socketState = SocketState::ESTABLISHED;
   newMySocket->myAddr = mySocket->myAddr;
-  newMySocket->connectedPair = request;
-
-  // peer socket addr
-  struct sockaddr_in *peerAddr =
-      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
-  peerAddr->sin_family = AF_INET;
-  peerAddr->sin_addr.s_addr = std::get<0>(request);
-  peerAddr->sin_port = std::get<1>(request);
+  newMySocket->connectedAddr = std::get<1>(request);
 
   // 클라이언트 주소 정보를 사용자 공간에 복사
   if (addr != nullptr && addrlen != nullptr &&
       *addrlen >= sizeof(sockaddr_in)) {
-    memcpy(addr, peerAddr, sizeof(sockaddr_in));
+    memcpy(addr, std::get<1>(request), sizeof(sockaddr_in));
     *addrlen = sizeof(sockaddr_in);
   }
 

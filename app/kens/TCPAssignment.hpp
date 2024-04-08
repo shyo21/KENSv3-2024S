@@ -30,15 +30,10 @@ namespace E {
 enum class SocketState {
   CLOSED,
   CREATED,
-  BOUND,
-  WAITING,
   LISTENING,
   SYN_SENT,
-  SYN_RCV,
-  SYNACK_RCV,
-  ACK_RCV,
-  ESTABLISHED,
-  CONNECTED,
+  SYN_RCVD,
+  ESTABLISHED
 };
 /*Basic socket information*/
 struct Socket {
@@ -52,13 +47,21 @@ struct Socket {
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
-  struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
-  std::queue<std::pair<uint32_t, in_port_t>> listeningQueue;
-  std::pair<uint32_t, in_port_t> connectedPair;
+  struct sockaddr_in *myAddr = nullptr;        /*Bindaddr*/
+  struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
+  // listening 중인 packet *
+  std::queue<Packet *> listeningQueue;
+  // pid 내 소켓 addr, 상대 소켓 addr -- ??
+  std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *, int>>
+      acceptQueue;
 };
 
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
+const int SYN = 2;
+const int ACK = 16;
+
+const size_t PACKET_HEADER_SIZE = 54;
 
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
@@ -73,6 +76,9 @@ private:
       std::pair<uint32_t, in_port_t>,
       std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>>
       handShakingMap;
+  // pid uuid - 소켓 포인터 / <소켓 포인터 , uuid>
+  std::set<std::tuple<struct Socket *, UUID, struct sockaddr *, socklen_t *>>
+      blockedProcessHandler;
 
 public:
   TCPAssignment(Host &host);
@@ -91,9 +97,14 @@ protected:
   uint16_t getSrcPort(Packet *);
   uint16_t getDestPort(Packet *);
   uint8_t getFlags(Packet *);
-  void setPacketSrcDest(Packet *, uint32_t, uint16_t, uint32_t, uint16_t);
 
+  void setPacketSrcDest(Packet *, uint32_t, uint16_t, uint32_t, uint16_t);
   struct Socket *getSocket(std::pair<uint32_t, in_port_t>);
+
+  void handleSYNSent(Packet *, struct Socket *);
+  void handleListening(Packet *, struct Socket *);
+  void handleSYNRcvd(Packet *, struct Socket *);
+
   void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
