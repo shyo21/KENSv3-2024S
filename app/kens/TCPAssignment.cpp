@@ -144,19 +144,34 @@ TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> destAddrPair,
   uint32_t srcIP = std::get<0>(srcAddrPair);
   in_port_t srcPort = std::get<1>(srcAddrPair);
 
-  // std::cout << "pair: " << IP << " " << Port << std::endl;
-
   struct Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
-    uint32_t iterDestIP = setIter->myAddr->sin_addr.s_addr;
-    in_port_t iterDestPort = setIter->myAddr->sin_port;
-    // std::cout << "iter: " << iterIP << " " << iterPort << std::endl;s
-    if (iterDestPort == destPort) {
-      if ((iterDestIP == destIP) || (iterDestIP == INADDR_ANY) ||
-          (destIP == INADDR_ANY)) {
+    if (setIter->socketState == SocketState::ESTABLISHED) {
+      uint32_t iterDestIP = setIter->myAddr->sin_addr.s_addr;
+      in_port_t iterDestPort = setIter->myAddr->sin_port;
+      uint32_t iterSrcIP = setIter->connectedAddr->sin_addr.s_addr;
+      in_port_t iterSrcPort = setIter->connectedAddr->sin_port;
 
-        mySocket = setIter;
-        // break;
+      if ((iterDestPort == destPort) && (iterSrcPort == srcPort)) {
+        if ((iterDestIP == destIP) || (iterDestIP == INADDR_ANY) ||
+            (destIP == INADDR_ANY)) {
+          if ((iterSrcIP == srcIP) || (iterSrcIP == INADDR_ANY) ||
+              (srcIP == INADDR_ANY)) {
+            mySocket = setIter;
+            break;
+          }
+        }
+      }
+    } else {
+      uint32_t iterDestIP = setIter->myAddr->sin_addr.s_addr;
+      in_port_t iterDestPort = setIter->myAddr->sin_port;
+      // std::cout << "iter: " << iterIP << " " << iterPort << std::endl;
+      if (iterDestPort == destPort) {
+        if ((iterDestIP == destIP) || (iterDestIP == INADDR_ANY) ||
+            (destIP == INADDR_ANY)) {
+          mySocket = setIter;
+          break;
+        }
       }
     }
   }
@@ -262,9 +277,6 @@ void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
     // 새 패킷 만들어서 synack 보내기
     Packet synAckPacket(PACKET_HEADER_SIZE);
     setPacketSrcDest(&synAckPacket, destIP, destPort, srcIP, srcPort);
-
-    in_port_t checkPort1 = getSrcPort(&synAckPacket);
-    in_port_t checkPort2 = getDestPort(&synAckPacket);
 
     // ACK 번호 설정(받은 SEQ number + 1)
     hAck = hSeq + 1;
@@ -517,6 +529,52 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
       return;
     }
   }
+
+  // /* SYN을 받은 경우 - SYN-ACK 패킷을 전송하며 동시 연결 준비 */
+  // if ((SYN & inputFlag) && !(ACK & inputFlag)) {
+  //   // 새 패킷 만들어서 synack 보내기
+  //   Packet synAckPacket(PACKET_HEADER_SIZE);
+  //   setPacketSrcDest(&synAckPacket, destIP, destPort, srcIP, srcPort);
+
+  //   // ACK 번호 설정(받은 SEQ number + 1)
+  //   hAck = hSeq + 1;
+  //   nAck = htonl(hAck);
+
+  //   /* 난수 생성기 - Morsenne Twiseter 알고리즘을 이용해 1~1000까지의 균일
+  //    * 분포를 가지는 난수를 생성한다 */
+  //   std::random_device rd;
+  //   std::mt19937 gen(rd());
+  //   std::uniform_int_distribution<int> distrib(1, 1000);
+
+  //   // SEQ 번호를 생성한 랜덤 넘버로 설정
+  //   hSeq = distrib(gen);
+  //   nSeq = htonl(hSeq);
+
+  //   // 패킷에 필요한 정보 써넣기
+  //   uint8_t dataOffset = 5 << 4;
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
+
+  //   uint16_t windowSize = htons(65535);
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
+  //   outputFlag = SYN | ACK; // SYN-ACK
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 13, &outputFlag, 1);
+  //   // CHECKSUM
+  //   uint8_t tcpSeg[20];
+  //   synAckPacket.readData(TCP_SEGMENT_START, tcpSeg, 20);
+  //   uint16_t calcSum =
+  //       ~NetworkUtil::tcp_sum(htonl(destIP), htonl(srcIP), tcpSeg, 20);
+  //   calcSum = htons(calcSum);
+  //   synAckPacket.writeData(TCP_SEGMENT_START + 16, &calcSum, 2);
+
+  //   /* TODO: Timer 설정하기 - payload 어떻게??? packet, ip, port, state? */
+
+  //   //  SYN-ACK 패킷 송신
+  //   this->sendPacket("IPv4", std::move(synAckPacket));
+  //   socket->socketState = SocketState::SYN_RCVD;
+  //   return;
+  // }
   return;
 }
 

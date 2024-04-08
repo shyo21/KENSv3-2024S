@@ -71,6 +71,11 @@ class TCPAssignment : public HostModule,
                       public TimerModule {
 private:
   virtual void timerCallback(std::any payload) final;
+  std::unordered_map<
+      std::pair<uint32_t, in_port_t>,
+      std::unordered_map<std::pair<uint32_t, in_port_t>,
+                         std::pair<struct Socket *, SocketState>>>
+      handshakingMap;
   // pid : Sockets
   std::set<struct Socket *> socketSet;
   // pid uuid - 소켓 포인터 / <소켓 포인터 , uuid>
