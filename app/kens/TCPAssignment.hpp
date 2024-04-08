@@ -47,7 +47,6 @@ struct Socket {
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
-<<<<<<< HEAD
   struct sockaddr_in *myAddr = nullptr;        /*Bindaddr*/
   struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
   // listening 중인 packet *
@@ -56,13 +55,6 @@ struct Socket {
   std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *, int>>
       acceptQueue;
 };
-=======
-  struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
-  std::queue<Packet *> listeningQueue;
-  std::queue<> acceptQueue;
-  // queue - pid, fd, myaddr, peerAddr -
-}
->>>>>>> f6a2f97653aad167e287e99f41cfdf232fad26c1
 
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
