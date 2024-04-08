@@ -47,6 +47,7 @@ struct Socket {
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
+<<<<<<< HEAD
   struct sockaddr_in *myAddr = nullptr;        /*Bindaddr*/
   struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
   // listening 중인 packet *
@@ -55,6 +56,13 @@ struct Socket {
   std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *, int>>
       acceptQueue;
 };
+=======
+  struct sockaddr_in *myAddr = nullptr; /*Bindaddr*/
+  std::queue<Packet *> listeningQueue;
+  std::queue<> acceptQueue;
+  // queue - pid, fd, myaddr, peerAddr -
+}
+>>>>>>> f6a2f97653aad167e287e99f41cfdf232fad26c1
 
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
@@ -72,9 +80,8 @@ private:
   // pid : Sockets
   std::set<struct Socket *> socketSet;
   // my ip,port : state , peer ip, port, seq, ack
-  std::unordered_map<
-      std::pair<uint32_t, in_port_t>,
-      std::tuple<std::pair<uint32_t, in_port_t>, SocketState, int, int>>
+  std::unordered_map<std::pair<uint32_t, in_port_t>,
+                     std::tuple<SocketState, int, int>>
       handShakingMap;
   // pid uuid - 소켓 포인터 / <소켓 포인터 , uuid>
   std::set<std::tuple<struct Socket *, UUID, struct sockaddr *, socklen_t *>>
