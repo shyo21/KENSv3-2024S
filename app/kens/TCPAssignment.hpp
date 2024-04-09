@@ -26,7 +26,7 @@
 
 namespace E {
 
-/*Basic descripter for socket state info*/
+/* Basic descripter for socket state info */
 enum class SocketState {
   CLOSED,
   CREATED,
@@ -35,6 +35,7 @@ enum class SocketState {
   SYN_RCVD,
   ESTABLISHED
 };
+
 /*Basic socket information*/
 struct Socket {
   int domain;       /*AF_INET*/
@@ -46,23 +47,21 @@ struct Socket {
 
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
-  uint32_t expectedAck;
+  uint32_t expectedAck;    /*seqNum + 1*/
 
-  struct sockaddr_in *myAddr = nullptr;        /*Bindaddr*/
+  struct sockaddr_in *myAddr = nullptr;        /*bindaddr*/
   struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
-  // listening 중인 packet
-  std::queue<Packet> listeningQueue;
-  // pid 내 소켓 addr, 상대 소켓 addr -- ??
+  std::queue<Packet> listeningQueue;           /*with backlog size*/
   std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *>>
       acceptQueue;
 };
 
+/*frequently used constants*/
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
 const int FIN = 1;
 const int SYN = 2;
 const int ACK = 16;
-
 const size_t PACKET_HEADER_SIZE = 54;
 
 class TCPAssignment : public HostModule,
@@ -76,11 +75,9 @@ private:
       std::unordered_map<std::pair<uint32_t, in_port_t>,
                          std::pair<struct Socket *, SocketState>>>
       handshakingMap;
-  // pid : Sockets
-  std::set<struct Socket *> socketSet;
-  // pid uuid - 소켓 포인터 / <소켓 포인터 , uuid>
+  std::set<struct Socket *> socketSet; /*sockets*/
   std::set<std::tuple<struct Socket *, UUID, struct sockaddr *, socklen_t *>>
-      blockedProcessHandler;
+      blockedProcessHandler; /*blocked processes*/
 
 public:
   TCPAssignment(Host &host);
@@ -88,7 +85,7 @@ public:
   virtual void finalize();
   virtual ~TCPAssignment();
 
-  // Add
+  /*implemented functions*/
   uint32_t getSrcIP(Packet *);
   uint32_t getDestIP(Packet *);
   uint16_t getSrcPort(Packet *);
@@ -103,6 +100,7 @@ public:
   void handleListening(Packet *, struct Socket *);
   void handleSYNRcvd(Packet *, struct Socket *);
   void handleEstab(Packet *, struct Socket *);
+
   void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
