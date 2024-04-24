@@ -56,11 +56,11 @@ struct Socket {
   std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *>>
       acceptQueue;
 
-  std::vector<char> sendBuffer;
-  std::vector<char> receiveBuffer; // 수신 데이터 버퍼
-  uint32_t sendBase;               // 송신 기준 점
-  uint32_t sendNext;          // 다음에 보낼 데이터의 시작 위치
-  uint32_t receiveNext;       // 다음에 받을 데이터의 시작 위치
+  std::vector<char> sendBuffer;    /* 송신 데이터 버퍼 */
+  std::vector<char> receiveBuffer; /* 수신 데이터 버퍼 */
+  uint32_t sendBase;               /* 송신 기준점 */
+  uint32_t sendNext;          /* 다음에 송신할 데이터의 시작점 */
+  uint32_t receiveNext;       /* 다음에 받을 데이터의 시작점 */
   uint32_t windowSize;        // 현재 윈도우 크기
   uint32_t initialWindowSize; // 초기 윈도우 크기
 };
