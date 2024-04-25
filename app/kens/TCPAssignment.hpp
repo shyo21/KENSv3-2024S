@@ -57,22 +57,43 @@ struct Socket {
       acceptQueue;
 
   std::vector<char> sendBuffer;    /* 송신 데이터 버퍼 */
+  std::vector<int> sendByteVector; /* 송신 데이터 크기 리스트 */
   std::vector<char> receiveBuffer; /* 수신 데이터 버퍼 */
   uint32_t sendBase;               /* 송신 기준점 */
-  uint32_t sendNext;          /* 다음에 송신할 데이터의 시작점 */
-  uint32_t receiveNext;       /* 다음에 받을 데이터의 시작점 */
-  uint32_t windowSize;        // 현재 윈도우 크기
-  uint32_t initialWindowSize; // 초기 윈도우 크기
+  uint32_t sendNext;           /* 다음에 송신할 데이터의 시작점 */
+  uint32_t receiveNext;        /* 다음에 받을 데이터의 시작점 */
+  uint32_t windowSize = 51200; // 현재 윈도우 크기
+};
+
+struct packetInfo {
+  size_t PACKET_SIZE;
+
+  /* IP datagram header */
+  uint8_t ihl;
+  size_t IP_HEADER_SIZE; /* ihl * 4 */
+  uint16_t totalLength;
+  uint32_t srcIP, destIP;
+
+  /* TCP segment header */
+  uint16_t srcPort, destPort;
+  uint32_t seqNum, ackNum;
+  uint8_t dataOffset = 5 << 4;
+  size_t TCP_HEADER_SIZE = 20; /* (dataOffset >> 4) * 4 */
+  uint8_t flag;
+  uint16_t windowSize, checkSum;
 };
 
 /*frequently used constants*/
+
 const int IP_DATAGRAM_START = 14;
 const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
 const int FIN = 1;
 const int SYN = 2;
 const int ACK = 16;
 const int WINDOW_SIZE = 51200;
-const size_t PACKET_HEADER_SIZE = 54;
+const size_t ETHERNET_HEADER_SIZE = 14;
+const size_t TOTAL_HEADER_SIZE = 54;
+const size_t MSS = 512;
 
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
@@ -81,7 +102,7 @@ class TCPAssignment : public HostModule,
 private:
   virtual void timerCallback(std::any payload) final;
   std::set<struct Socket *> socketSet; /*sockets*/
-  std::set<std::tuple<struct Socket *, UUID, struct sockaddr *, socklen_t *>>
+  std::set<std::tuple<struct Socket *, UUID, void *, void *>>
       blockedProcessHandler; /*blocked processes*/
 
 public:
@@ -91,6 +112,9 @@ public:
   virtual ~TCPAssignment();
 
   /*implemented functions*/
+  void readPacket(Packet *, packetInfo *);
+  void writePacket(Packet *, packetInfo *);
+  void writeCheckSum(Packet *);
   uint32_t getSrcIP(Packet *);
   uint32_t getDestIP(Packet *);
   uint16_t getSrcPort(Packet *);
