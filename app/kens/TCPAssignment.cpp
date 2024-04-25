@@ -132,7 +132,7 @@ void TCPAssignment::readPacket(Packet *packet, packetInfo *info) {
 /* 패킷에 데이터 작성하기: network byte order로 */
 void TCPAssignment::writePacket(Packet *packet, packetInfo *info) {
   uint32_t nsrcIP, ndestIP, nseqNum, nackNum;
-  uint16_t nsrcPort, ndestPort, nwinSize, ncheckSum;
+  uint16_t nsrcPort, ndestPort, nwinSize;
   uint8_t ndataOffset, nflag;
 
   nsrcIP = htonl(info->srcIP);
@@ -168,12 +168,10 @@ void TCPAssignment::writeCheckSum(Packet *packet) {
   size_t PACKET_SIZE = packet->getSize();
 
   size_t IP_START = ETHERNET_HEADER_SIZE;
-  packet->readData(IP_START, &nihl, 1);
   packet->readData(IP_START + 12, &nsrcIP, 4);
   packet->readData(IP_START + 16, &ndestIP, 4);
-  size_t IP_HEADER_SIZE = (nihl & 15) * 4;
 
-  size_t TCP_START = ETHERNET_HEADER_SIZE + IP_HEADER_SIZE;
+  size_t TCP_START = ETHERNET_HEADER_SIZE + 20;
   size_t TCP_SIZE = PACKET_SIZE - TCP_START;
 
   uint8_t tcpSeg[TCP_SIZE];
@@ -182,47 +180,6 @@ void TCPAssignment::writeCheckSum(Packet *packet) {
   ncheckSum = htons(checkSum);
 
   packet->writeData(TCP_START + 16, &ncheckSum, 2);
-}
-
-uint32_t TCPAssignment::getSrcIP(Packet *packet) {
-  uint32_t ipaddr;
-  packet->readData(IP_DATAGRAM_START + 12, &ipaddr, 4);
-  return ntohl(ipaddr);
-}
-uint32_t TCPAssignment::getDestIP(Packet *packet) {
-  uint32_t ipaddr;
-  packet->readData(IP_DATAGRAM_START + 16, &ipaddr, 4);
-  return ntohl(ipaddr);
-}
-uint16_t TCPAssignment::getSrcPort(Packet *packet) {
-  uint16_t port;
-  packet->readData(TCP_SEGMENT_START, &port, 2);
-  return ntohs(port);
-}
-uint16_t TCPAssignment::getDestPort(Packet *packet) {
-  uint16_t port;
-  packet->readData(TCP_SEGMENT_START + 2, &port, 2);
-  return ntohs(port);
-}
-uint8_t TCPAssignment::getFlag(Packet *packet) {
-  uint8_t flag;
-  packet->readData(TCP_SEGMENT_START + 13, &flag, 1);
-  return flag;
-}
-
-/* 패킷에 ip와 port정보 쓰기: network byte order로 */
-void TCPAssignment::setPacketSrcDest(Packet *packet, uint32_t srcIP,
-                                     uint16_t srcPort, uint32_t destIP,
-                                     uint16_t destPort) {
-  uint32_t nSrcIP = htonl(srcIP);
-  uint32_t nDestIP = htonl(destIP);
-  uint16_t nSrcPort = htons(srcPort);
-  uint16_t nDestPort = htons(destPort);
-
-  packet->writeData(IP_DATAGRAM_START + 12, &nSrcIP, 4);
-  packet->writeData(IP_DATAGRAM_START + 16, &nDestIP, 4);
-  packet->writeData(TCP_SEGMENT_START, &nSrcPort, 2);
-  packet->writeData(TCP_SEGMENT_START + 2, &nDestPort, 2);
 }
 
 /* 패킷에 담긴 ip-port 쌍을 이용해 적합한 소켓 선택 */
@@ -273,26 +230,15 @@ TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> destAddrPair,
 }
 
 void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
-  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
-  uint16_t srcPort, destPort;
-  uint8_t inputFlag;
+  std::pair<uint32_t, in_port_t> srcAddrPair, destAddrPair;
 
-  /* 패킷에서 필요한 정보 추출: host-order */
-  srcIP = getSrcIP(&packet);
-  srcPort = getSrcPort(&packet);
-  destIP = getDestIP(&packet);
-  destPort = getDestPort(&packet);
-  inputFlag = getFlag(&packet);
-
-  packet.readData(TCP_SEGMENT_START + 4, &nSeq, 4);
-  packet.readData(TCP_SEGMENT_START + 8, &nAck, 4);
-  hSeq = ntohl(nSeq);
-  hAck = ntohl(nAck);
+  /* 패킷에서 정보 읽어오기 */
+  packetInfo *info = new packetInfo;
+  readPacket(&packet, info);
 
   /* socketSet 탐색을 통해 적합한 소켓 선택 */
-  std::pair<uint32_t, in_port_t> destAddrPair =
-      std::make_pair(destIP, destPort);
-  std::pair<uint32_t, in_port_t> srcAddrPair = std::make_pair(srcIP, srcPort);
+  srcAddrPair = std::make_pair(info->srcIP, info->srcPort);
+  destAddrPair = std::make_pair(info->destIP, info->destPort);
   struct Socket *mySocket = getSocket(destAddrPair, srcAddrPair);
   if (mySocket == nullptr) {
     // printf("packetArrived(): cannot find socket\n");
@@ -316,141 +262,96 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   default:
     break;
   }
-  return;
+
+  delete info;
+  info = nullptr;
 }
 
 void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
-  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
-  uint16_t srcPort, destPort;
-  uint8_t inputFlag, outputFlag;
-
   /* 패킷에서 필요한 정보 추출: host-order */
-  srcIP = getSrcIP(packet);
-  srcPort = getSrcPort(packet);
-  destIP = getDestIP(packet);
-  destPort = getDestPort(packet);
-  inputFlag = getFlag(packet);
-
-  packet->readData(TCP_SEGMENT_START + 4, &nSeq, 4);
-  packet->readData(TCP_SEGMENT_START + 8, &nAck, 4);
-  hSeq = ntohl(nSeq);
-  hAck = ntohl(nAck);
+  packetInfo *info = new packetInfo;
+  readPacket(packet, info);
 
   /* SYN 패킷인 경우 */
-  if ((SYN & inputFlag) && !(ACK & inputFlag)) {
-    Packet synAckPacket(TOTAL_HEADER_SIZE);
-    setPacketSrcDest(&synAckPacket, destIP, destPort, srcIP, srcPort);
+  if ((SYN & info->flag) && !(ACK & info->flag)) {
 
-    /* ackNum = seqNum + 1 */
-    hAck = hSeq + 1;
-    nAck = htonl(hAck);
+    /* SYNACK 패킷 생성 */
+    packetInfo *synackInfo = new packetInfo;
+    Packet *synackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
+    synackInfo->srcIP = info->destIP;
+    synackInfo->destIP = info->srcIP;
+
+    synackInfo->srcPort = info->destPort;
+    synackInfo->destPort = info->srcPort;
 
     /* 난수 생성기 */
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> distrib(1, 1000);
-    /* SEQ 번호를 생성한 랜덤 넘버로 설정 */
-    hSeq = distrib(gen);
-    nSeq = htonl(hSeq);
+    synackInfo->seqNum = distrib(gen);
+    synackInfo->ackNum = info->seqNum + 1;
+    synackInfo->flag = SYN | ACK;
 
-    /* 패킷에 필요한 정보 작성 */
-    uint8_t dataOffset = 5 << 4;
-    synAckPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
-
-    uint16_t windowSize = htons(WINDOW_SIZE);
-    synAckPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
-    synAckPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
-    synAckPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
-    outputFlag = SYN | ACK;
-    synAckPacket.writeData(TCP_SEGMENT_START + 13, &outputFlag, 1);
-
-    /* CHECKSUM */
-    uint8_t tcpSeg[20];
-    synAckPacket.readData(TCP_SEGMENT_START, tcpSeg, 20);
-    uint16_t calcSum =
-        ~NetworkUtil::tcp_sum(htonl(destIP), htonl(srcIP), tcpSeg, 20);
-    calcSum = htons(calcSum);
-    synAckPacket.writeData(TCP_SEGMENT_START + 16, &calcSum, 2);
-
-    /* TODO: Timer 설정하기 - payload 어떻게??? */
+    writePacket(synackPacket, synackInfo);
+    writeCheckSum(synackPacket);
 
     /* SYN-ACK 패킷 송신 */
-    this->sendPacket("IPv4", std::move(synAckPacket));
-
-    /* 소켓 정보 설정 */
+    this->sendPacket("IPv4", std::move(*synackPacket));
     socket->socketState = SocketState::SYN_RCVD;
-    return;
+
+    delete synackInfo;
+    delete synackPacket;
+    synackInfo = nullptr;
+    synackPacket = nullptr;
+
   } else {
     // printf("handleListening(): not SYN packet\n");
-    return;
   }
+
+  delete info;
+  info = nullptr;
 }
 
 void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
-  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck, hSeqOut;
-  uint16_t srcPort, destPort;
-  uint8_t inputFlag, outputFlag;
-
   /* 패킷에서 필요한 정보 추출: host-order */
-  srcIP = getSrcIP(packet);
-  srcPort = getSrcPort(packet);
-  destIP = getDestIP(packet);
-  destPort = getDestPort(packet);
-  inputFlag = getFlag(packet);
-
-  packet->readData(TCP_SEGMENT_START + 4, &nSeq, 4);
-  packet->readData(TCP_SEGMENT_START + 8, &nAck, 4);
-  hSeq = ntohl(nSeq);
-  hAck = ntohl(nAck);
+  packetInfo *info = new packetInfo;
+  readPacket(packet, info);
 
   /* SYN-ACK 패킷인 경우 */
-  if ((SYN & inputFlag) && (ACK & inputFlag)) {
-    if (hAck != socket->expectedAck) {
+  if ((SYN & info->flag) && (ACK & info->flag)) {
+
+    if (info->ackNum != socket->expectedAck) {
       // printf("handleSYNSent(): wrong ack num\n");
       return;
     }
-    Packet ackPacket(TOTAL_HEADER_SIZE);
-    setPacketSrcDest(&ackPacket, destIP, destPort, srcIP, srcPort);
+    /* ACK 패킷 생성 */
+    packetInfo *ackInfo = new packetInfo;
+    Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
 
-    /* seqNum = 받은 ackNum 그대로 */
-    hSeqOut = hAck;
-    nSeq = htonl(hSeqOut);
+    ackInfo->srcIP = info->destIP;
+    ackInfo->destIP = info->srcIP;
 
-    /* ackNum = seqNum + 1 */
-    hAck = hSeq + 1;
-    nAck = htonl(hAck);
+    ackInfo->srcPort = info->destPort;
+    ackInfo->destPort = info->srcPort;
 
-    /* 기타 패킷 정보 작성 */
-    uint8_t dataOffset = 5 << 4;
-    ackPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
+    ackInfo->seqNum = info->ackNum;
+    ackInfo->ackNum = info->seqNum + 1;
+    ackInfo->flag = ACK;
 
-    uint16_t windowSize = htons(WINDOW_SIZE);
-    ackPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
-
-    ackPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
-    ackPacket.writeData(TCP_SEGMENT_START + 8, &nAck, 4);
-
-    outputFlag = ACK;
-    ackPacket.writeData(TCP_SEGMENT_START + 13, &outputFlag, 1);
-
-    /* CHECKSUM */
-    uint8_t tcpSeg[20];
-    ackPacket.readData(TCP_SEGMENT_START, tcpSeg, 20);
-    uint16_t calcSum =
-        ~NetworkUtil::tcp_sum(htonl(destIP), htonl(srcIP), tcpSeg, 20);
-    calcSum = htons(calcSum);
-    ackPacket.writeData(TCP_SEGMENT_START + 16, &calcSum, 2);
+    writePacket(ackPacket, ackInfo);
+    writeCheckSum(ackPacket);
 
     /* TODO: Timer 설정하기 - payload 어떻게??? */
 
     /* ACK 패킷 송신 */
-    this->sendPacket("IPv4", std::move(ackPacket));
+    this->sendPacket("IPv4", std::move(*ackPacket));
 
     /* 소켓 정보 설정 */
     socket->connectedAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
     memset(socket->connectedAddr, 0, sizeof(sockaddr_in));
-    socket->connectedAddr->sin_addr.s_addr = srcIP;
-    socket->connectedAddr->sin_port = srcPort;
+    socket->connectedAddr->sin_addr.s_addr = info->srcIP;
+    socket->connectedAddr->sin_port = info->srcPort;
     socket->connectedAddr->sin_family = AF_INET;
 
     socket->socketState = SocketState::ESTABLISHED;
@@ -466,42 +367,37 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
       blockedProcessHandler.erase(blockedIter);
       return;
     }
+
+    delete ackInfo;
+    delete ackPacket;
+    ackInfo = nullptr;
+    ackPacket = nullptr;
   }
-  return;
+
+  delete info;
+  info = nullptr;
 }
 
 void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
-  uint32_t srcIP, destIP, hSeq, hAck, nSeq, nAck;
-  uint16_t srcPort, destPort;
-  uint8_t inputFlag;
-
   /* 패킷에서 필요한 정보 추출: host-order */
-  srcIP = getSrcIP(packet);
-  srcPort = getSrcPort(packet);
-  destIP = getDestIP(packet);
-  destPort = getDestPort(packet);
-  inputFlag = getFlag(packet);
-
-  packet->readData(TCP_SEGMENT_START + 4, &nSeq, 4);
-  packet->readData(TCP_SEGMENT_START + 8, &nAck, 4);
-  hSeq = ntohl(nSeq);
-  hAck = ntohl(nAck);
+  packetInfo *info = new packetInfo;
+  readPacket(packet, info);
 
   struct sockaddr_in *myAddr =
       (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
   myAddr->sin_family = AF_INET;
-  myAddr->sin_addr.s_addr = destIP;
-  myAddr->sin_port = destPort;
+  myAddr->sin_addr.s_addr = info->destIP;
+  myAddr->sin_port = info->destPort;
 
   struct sockaddr_in *peerAddr =
       (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
   peerAddr->sin_family = AF_INET;
-  peerAddr->sin_addr.s_addr = srcIP;
-  peerAddr->sin_port = srcPort;
+  peerAddr->sin_addr.s_addr = info->srcIP;
+  peerAddr->sin_port = info->srcPort;
 
   /* 연속된 SYN 패킷은 소켓의 리스닝큐에 일단 저장
    * backlog 넘치지 않게 확인 */
-  if ((SYN & inputFlag) && !(ACK & inputFlag)) {
+  if ((SYN & info->flag) && !(ACK & info->flag)) {
     if ((socket->BACKLOG - 1) > socket->listeningQueue.size()) {
       Packet temp = *packet;
       socket->listeningQueue.push(temp);
@@ -510,16 +406,17 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
   }
 
   /* ACK 패킷인 경우 */
-  if (ACK & inputFlag) {
+  if (ACK & info->flag) {
+
     /* 만약 block된 accept 프로세스가 있다면 여기서 처리 */
     if (!blockedProcessHandler.empty()) {
+
       for (const auto &setIter : blockedProcessHandler) {
+
         struct Socket *mySocket = std::get<0>(setIter);
         UUID syscallUUID = std::get<1>(setIter);
 
         if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd)) {
-
-          /* 새로운 fd 생성 */
           int newMySockFd = createFileDescriptor(mySocket->pid);
           if (newMySockFd < 0) {
             this->returnSystemCall(syscallUUID, -1);
@@ -578,7 +475,9 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
       packetArrived("IPv4", std::move(nextPacket));
     }
   }
-  return;
+
+  delete info;
+  info = nullptr;
 }
 
 void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
@@ -588,6 +487,7 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
   size_t payloadLength =
       info->totalLength - (info->IP_HEADER_SIZE + info->TCP_HEADER_SIZE);
+  size_t TCP_START = ETHERNET_HEADER_SIZE + info->IP_HEADER_SIZE;
 
   /* 받은 패킷에 데이터 payload가 들어있는 경우 */
   if (payloadLength > 0) {
@@ -598,7 +498,7 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
     /* 새로운 패킷인 경우 데이터를 내 버퍼로 복사 */
     std::vector<char> payload(payloadLength);
-    packet->readData(TCP_SEGMENT_START + info->dataOffset * 4, payload.data(),
+    packet->readData(TCP_START + info->TCP_HEADER_SIZE, payload.data(),
                      payloadLength);
     for (auto byte : payload) {
       socket->receiveBuffer.push_back(byte);
@@ -609,9 +509,12 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
      * blocked라면 buf에 데이터 복사 후 여기서 리턴해줘야 함
      * 이를 위해 blocked handler에 buf의 주소와 크기 정보 저장 필요 */
     if (!blockedProcessHandler.empty()) {
+
       for (const auto &setIter : blockedProcessHandler) {
+
         struct Socket *mySocket = std::get<0>(setIter);
         UUID syscallUUID = std::get<1>(setIter);
+
         if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd)) {
           /* 읽을 데이터의 크기 설정 후 buf로 데이터 복사 */
           size_t bytesRead = std::min(*(size_t *)std::get<3>(setIter),
@@ -628,9 +531,13 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
     /* 정상적으로 복사완료한 패킷에 대한 ACK 발송 */
     packetInfo *ackInfo = new packetInfo;
-    Packet *ackPacket = new Packet(TOTAL_HEADER_SIZE);
+    Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
     ackInfo->srcIP = info->destIP;
+    ackInfo->destIP = info->srcIP;
+
     ackInfo->srcPort = info->destPort;
+    ackInfo->destPort = info->srcPort;
     ackInfo->seqNum = info->ackNum;
     ackInfo->ackNum = info->seqNum + payloadLength;
     ackInfo->flag = ACK;
@@ -638,13 +545,18 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
     writePacket(ackPacket, ackInfo);
     writeCheckSum(ackPacket);
+
     this->sendPacket("IPv4", std::move(*ackPacket));
+
+    delete ackInfo;
+    delete ackPacket;
+    ackInfo = nullptr;
+    ackPacket = nullptr;
   }
 
   /* FIN 패킷인 경우 */
   else if (FIN & info->flag) {
     // printf("estab handle");
-    return;
   }
 
   /* 빈 ACK 패킷인 경우 */
@@ -663,38 +575,46 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
     // 더 보낼 데이터가 있으면 전송
     sendData(socket);
   }
-  return;
+
+  delete info;
+  info = nullptr;
 }
 
 void TCPAssignment::sendData(struct Socket *socket) {
   // 데이터를 보낼 수 있는 조건 확인 (송신 윈도우 내에 있는지)
   while (!socket->sendBuffer.empty() &&
          (socket->sendNext < socket->sendBase + socket->windowSize)) {
+
     size_t dataSize =
-        std::min(socket->sendBuffer.size(), MSS,
-                 static_cast<size_t>(socket->windowSize -
-                                     (socket->sendNext - socket->sendBase)));
+        std::min({socket->sendBuffer.size(), MSS,
+                  static_cast<size_t>(socket->windowSize -
+                                      (socket->sendNext - socket->sendBase))});
 
     packetInfo *dataInfo = new packetInfo;
-    Packet dataPacket(TOTAL_HEADER_SIZE + dataSize);
-    dataInfo->srcIP = socket->myAddr->sin_addr.s_addr;
+    Packet *dataPacket = new Packet(DEFAULT_HEADER_SIZE + dataSize);
 
-    dataInfo->srcIP = socket->myAddr->sin_port,
+    dataInfo->srcIP = socket->myAddr->sin_addr.s_addr;
     dataInfo->destIP = socket->connectedAddr->sin_addr.s_addr,
+
+    dataInfo->srcPort = socket->myAddr->sin_port,
     dataInfo->destPort = socket->connectedAddr->sin_port;
     dataInfo->seqNum = socket->sendBase;
     dataInfo->ackNum = 0;
     dataInfo->flag = ACK;
+
+    writePacket(dataPacket, dataInfo);
+    dataPacket->writeData(DEFAULT_HEADER_SIZE, socket->sendBuffer.data(),
+                          dataSize);
     writeCheckSum(dataPacket);
 
-    uint32_t nSeqOut = htonl(socket->sendNext);
-    dataPacket.writeData(TCP_SEGMENT_START + 4, &nSeqOut, 4);
-    dataPacket.writeData(TCP_SEGMENT_START + 20, socket->sendBuffer.data(),
-                         dataSize);
-
     // 패킷 전송
-    this->sendPacket("IPv4", std::move(dataPacket));
+    this->sendPacket("IPv4", std::move(*dataPacket));
     socket->sendNext += dataSize;
+
+    delete dataInfo;
+    delete dataPacket;
+    dataInfo = nullptr;
+    dataPacket = nullptr;
   }
 }
 
@@ -711,8 +631,6 @@ void TCPAssignment::deleteSocket(struct Socket *socket) {
     socket->acceptQueue.pop();
 
   delete socket;
-
-  return;
 }
 
 void TCPAssignment::timerCallback(std::any payload) {
@@ -952,6 +870,7 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
 
   /* 내 소켓이 unbound인 경우: IP layer 참조해 주소 획득 */
   if (!(mySocket->bound)) {
+
     ipv4_t peerIP_ =
         NetworkUtil::UINT64ToArray<sizeof(uint32_t)>((uint64_t)peerIP);
     int routingTablePort = getRoutingTable(peerIP_);
@@ -987,38 +906,29 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
     myPort = mySocket->myAddr->sin_port;
   }
 
-  /* SYN packet 생성 */
-  Packet synPacket(TOTAL_HEADER_SIZE);
-  setPacketSrcDest(&synPacket, myIP, myPort, peerIP, peerPort);
+  /* SYN 패킷 생성 */
+  packetInfo *synInfo = new packetInfo;
+  Packet *synPacket = new Packet(DEFAULT_HEADER_SIZE);
 
-  /* 랜덤 seqNum 생성 */
+  synInfo->srcIP = myIP;
+  synInfo->destIP = peerIP;
+
+  synInfo->srcPort = myPort;
+  synInfo->destPort = peerPort;
+
+  /* 난수 생성기 */
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<int> distrib(1, 1000);
-  uint32_t hSeq = distrib(gen);
-  uint32_t nSeq = htonl(hSeq);
-  synPacket.writeData(TCP_SEGMENT_START + 4, &nSeq, 4);
+  synInfo->seqNum = distrib(gen);
+  synInfo->flag = SYN;
 
-  mySocket->expectedAck = hSeq + 1;
+  mySocket->expectedAck = synInfo->seqNum + 1;
 
-  uint8_t dataOffset = 5 << 4;
-  synPacket.writeData(TCP_SEGMENT_START + 12, &dataOffset, 1);
+  writePacket(synPacket, synInfo);
+  writeCheckSum(synPacket);
 
-  uint8_t synFlag = SYN;
-  synPacket.writeData(TCP_SEGMENT_START + 13, &synFlag, 1);
-
-  uint16_t windowSize = htons(WINDOW_SIZE);
-  synPacket.writeData(TCP_SEGMENT_START + 14, &windowSize, 2);
-
-  /* CHECKSUM */
-  uint8_t tcpSeg[20];
-  synPacket.readData(TCP_SEGMENT_START, tcpSeg, 20);
-  uint16_t calcSum =
-      ~NetworkUtil::tcp_sum(htonl(myIP), htonl(peerIP), tcpSeg, 20);
-  calcSum = htons(calcSum);
-  synPacket.writeData(TCP_SEGMENT_START + 16, &calcSum, 2);
-
-  this->sendPacket("IPv4", std::move(synPacket));
+  this->sendPacket("IPv4", std::move(*synPacket));
 
   /* implicit binding */
   if (!mySocket->bound) {
@@ -1030,7 +940,10 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   }
   mySocket->socketState = SocketState::SYN_SENT;
 
-  return;
+  delete synInfo;
+  delete synPacket;
+  synInfo = nullptr;
+  synPacket = nullptr;
 }
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
@@ -1098,7 +1011,6 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   // printf("newMySockFd %d\n", newMySockFd);
 
   this->returnSystemCall(syscallUUID, newMySockFd);
-  return;
 }
 
 void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd,
@@ -1202,7 +1114,7 @@ void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd,
 
   /* sendBuffer에 있는 데이터를 패킷으로 만들어 발송 */
   sendData(mySocket);
-  returnSystemCall(syscallUUID, count);
+  this->returnSystemCall(syscallUUID, count);
 }
 
 } // namespace E

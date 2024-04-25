@@ -69,30 +69,27 @@ struct packetInfo {
   size_t PACKET_SIZE;
 
   /* IP datagram header */
-  uint8_t ihl;
-  size_t IP_HEADER_SIZE; /* ihl * 4 */
+  uint8_t ihl = 5;
+  size_t IP_HEADER_SIZE = 20; /* ihl * 4 */
   uint16_t totalLength;
   uint32_t srcIP, destIP;
 
   /* TCP segment header */
   uint16_t srcPort, destPort;
   uint32_t seqNum, ackNum;
-  uint8_t dataOffset = 5 << 4;
+  uint8_t dataOffset = 5;
   size_t TCP_HEADER_SIZE = 20; /* (dataOffset >> 4) * 4 */
   uint8_t flag;
-  uint16_t windowSize, checkSum;
+  uint16_t windowSize = 51200;
+  uint16_t checkSum;
 };
 
 /*frequently used constants*/
-
-const int IP_DATAGRAM_START = 14;
-const int TCP_SEGMENT_START = IP_DATAGRAM_START + 20;
-const int FIN = 1;
-const int SYN = 2;
-const int ACK = 16;
-const int WINDOW_SIZE = 51200;
+const uint8_t FIN = 1;
+const uint8_t SYN = 2;
+const uint8_t ACK = 16;
+const size_t DEFAULT_HEADER_SIZE = 54;
 const size_t ETHERNET_HEADER_SIZE = 14;
-const size_t TOTAL_HEADER_SIZE = 54;
 const size_t MSS = 512;
 
 class TCPAssignment : public HostModule,
@@ -115,22 +112,16 @@ public:
   void readPacket(Packet *, packetInfo *);
   void writePacket(Packet *, packetInfo *);
   void writeCheckSum(Packet *);
-  uint32_t getSrcIP(Packet *);
-  uint32_t getDestIP(Packet *);
-  uint16_t getSrcPort(Packet *);
-  uint16_t getDestPort(Packet *);
-  uint8_t getFlag(Packet *);
 
-  void setPacketSrcDest(Packet *, uint32_t, uint16_t, uint32_t, uint16_t);
   struct Socket *getSocket(std::pair<uint32_t, in_port_t>,
                            std::pair<uint32_t, in_port_t>);
-  void sendData(struct Socket *socket);
 
   void handleSYNSent(Packet *, struct Socket *);
   void handleListening(Packet *, struct Socket *);
   void handleSYNRcvd(Packet *, struct Socket *);
   void handleEstab(Packet *, struct Socket *);
 
+  void sendData(struct Socket *socket);
   void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
