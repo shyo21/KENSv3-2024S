@@ -355,6 +355,8 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     socket->connectedAddr->sin_family = AF_INET;
 
     socket->socketState = SocketState::ESTABLISHED;
+    socket->sentSeq = ackInfo->seqNum;
+    socket->sentAck = ackInfo->ackNum;
 
     /* 내가 처리한게 blocked process인지 확인 */
     auto blockedIter =
@@ -598,8 +600,8 @@ void TCPAssignment::sendData(struct Socket *socket) {
 
     dataInfo->srcPort = socket->myAddr->sin_port,
     dataInfo->destPort = socket->connectedAddr->sin_port;
-    dataInfo->seqNum = socket->sendBase;
-    dataInfo->ackNum = 0;
+    dataInfo->seqNum = socket->sentSeq + 1;
+    dataInfo->ackNum = socket->sentAck;
     dataInfo->flag = ACK;
 
     writePacket(dataPacket, dataInfo);
@@ -609,7 +611,10 @@ void TCPAssignment::sendData(struct Socket *socket) {
 
     // 패킷 전송
     this->sendPacket("IPv4", std::move(*dataPacket));
+
     socket->sendNext += dataSize;
+    socket->sentSeq = dataInfo->seqNum;
+    socket->sentAck = dataInfo->ackNum;
 
     delete dataInfo;
     delete dataPacket;

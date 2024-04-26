@@ -63,6 +63,9 @@ struct Socket {
   uint32_t sendNext;           /* 다음에 송신할 데이터의 시작점 */
   uint32_t receiveNext;        /* 다음에 받을 데이터의 시작점 */
   uint32_t windowSize = 51200; // 현재 윈도우 크기
+
+  uint32_t sentSeq;
+  uint32_t sentAck;
 };
 
 struct packetInfo {
