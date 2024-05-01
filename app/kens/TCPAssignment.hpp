@@ -39,6 +39,8 @@ enum class SocketState {
 
 /*Basic socket information*/
 struct Socket {
+  int index = 0;
+
   int domain;       /*AF_INET*/
   int type;         /*SOCK_STREAM*/
   int protocol;     /*IPPROTO_TCP*/
@@ -48,7 +50,6 @@ struct Socket {
 
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
-  uint32_t expectedAck;    /*seqNum + 1*/
 
   struct sockaddr_in *myAddr = nullptr;        /*bindaddr*/
   struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
@@ -56,13 +57,16 @@ struct Socket {
   std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *>>
       acceptQueue;
 
-  std::vector<char> sendBuffer;    /* 송신 데이터 버퍼 */
-  std::vector<int> sendByteVector; /* 송신 데이터 크기 리스트 */
-  std::vector<char> receiveBuffer; /* 수신 데이터 버퍼 */
-  uint32_t sendBase;               /* 송신 기준점 */
-  uint32_t sendNext;           /* 다음에 송신할 데이터의 시작점 */
-  uint32_t receiveNext;        /* 다음에 받을 데이터의 시작점 */
-  uint32_t windowSize = 51200; // 현재 윈도우 크기
+  std::vector<std::tuple<bool, UUID, size_t, std::vector<char>>> sendBuffer;
+  std::vector<std::vector<char>> receiveBuffer;
+
+  /*(expectedAck, dataSize, packet) 튜플 저장*/
+  std::vector<std::tuple<uint32_t, size_t, Packet>> unAckedPackets;
+
+  size_t windowSize = 51200;
+  size_t sentSize = 0;
+  size_t sendBase = 0;
+  size_t sendNext = 0;
 
   uint32_t sentSeq;
   uint32_t sentAck;
@@ -101,9 +105,11 @@ class TCPAssignment : public HostModule,
                       public TimerModule {
 private:
   virtual void timerCallback(std::any payload) final;
+
   std::set<struct Socket *> socketSet; /*sockets*/
   std::set<std::tuple<struct Socket *, UUID, void *, void *>>
       blockedProcessHandler; /*blocked processes*/
+  int shyo = 0;
 
 public:
   TCPAssignment(Host &host);
@@ -124,7 +130,7 @@ public:
   void handleSYNRcvd(Packet *, struct Socket *);
   void handleEstab(Packet *, struct Socket *);
 
-  void sendData(struct Socket *socket);
+  void sendData(struct Socket *);
   void deleteSocket(struct Socket *);
 
   void syscall_socket(UUID, int, int, int, int);

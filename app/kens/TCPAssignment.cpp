@@ -298,12 +298,19 @@ void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
 
     /* SYN-ACK 패킷 송신 */
     this->sendPacket("IPv4", std::move(*synackPacket));
+
+    // synack TIMER 생성
+    // 타이머 새로 생성 : UUID synTimer = addTimer(payload, RTT)
+    // 보낸 시점 기록 : getCurrentTime()
+    // (타이머 UUID, 보낸 시점, expected Ack, datasize, clone 된 패킷)
+
+    /* Socket data update*/
     socket->socketState = SocketState::SYN_RCVD;
+    socket->sentSeq = synackInfo->seqNum + 1;
+    socket->sentAck = synackInfo->ackNum;
 
     delete synackInfo;
-    delete synackPacket;
     synackInfo = nullptr;
-    synackPacket = nullptr;
 
   } else {
     // printf("handleListening(): not SYN packet\n");
@@ -321,10 +328,16 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
   /* SYN-ACK 패킷인 경우 */
   if ((SYN & info->flag) && (ACK & info->flag)) {
 
-    if (info->ackNum != socket->expectedAck) {
+    if (info->ackNum != socket->sentSeq + 1) {
       // printf("handleSYNSent(): wrong ack num\n");
       return;
     }
+    // syn TIMER 종료
+    // checksum 확인
+    // unAcketPacket의 맨 앞에꺼 뽑아와서 정보 획득
+    // cancelTimer()
+    // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트`
+
     /* ACK 패킷 생성 */
     packetInfo *ackInfo = new packetInfo;
     Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
@@ -342,8 +355,6 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     writePacket(ackPacket, ackInfo);
     writeCheckSum(ackPacket);
 
-    /* TODO: Timer 설정하기 - payload 어떻게??? */
-
     /* ACK 패킷 송신 */
     this->sendPacket("IPv4", std::move(*ackPacket));
 
@@ -357,6 +368,7 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     socket->socketState = SocketState::ESTABLISHED;
     socket->sentSeq = ackInfo->seqNum;
     socket->sentAck = ackInfo->ackNum;
+    // socket->nextSeq = ackInfo->seqNum;
 
     /* 내가 처리한게 blocked process인지 확인 */
     auto blockedIter =
@@ -371,9 +383,7 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     }
 
     delete ackInfo;
-    delete ackPacket;
     ackInfo = nullptr;
-    ackPacket = nullptr;
   }
 
   delete info;
@@ -410,6 +420,12 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
   /* ACK 패킷인 경우 */
   if (ACK & info->flag) {
 
+    // synack TIMER 종료
+    // checksum 확인
+    // unAckedPacket의 맨 앞에꺼 뽑아와서 정보 획득
+    // cancelTimer()
+    // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
+
     /* 만약 block된 accept 프로세스가 있다면 여기서 처리 */
     if (!blockedProcessHandler.empty()) {
 
@@ -432,9 +448,15 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
           newMySocket->protocol = mySocket->protocol;
           newMySocket->pid = mySocket->pid;
           newMySocket->fd = newMySockFd;
+
+          newMySocket->bound = true;
           newMySocket->socketState = SocketState::ESTABLISHED;
+
           newMySocket->myAddr = myAddr;
           newMySocket->connectedAddr = peerAddr;
+
+          newMySocket->sentSeq = mySocket->sentSeq;
+          newMySocket->sentAck = mySocket->sentAck;
 
           /* 소켓에 저장된 addr 추출: network-order */
           if ((sockaddr_in *)std::get<2>(setIter) != nullptr &&
@@ -491,9 +513,11 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
       info->totalLength - (info->IP_HEADER_SIZE + info->TCP_HEADER_SIZE);
   size_t TCP_START = ETHERNET_HEADER_SIZE + info->IP_HEADER_SIZE;
 
+  // synack packet을 받았을 때 처리
+  /* ACK 패킷을 다시 전송*/
+
   /* 받은 패킷에 데이터 payload가 들어있는 경우 */
   if (payloadLength > 0) {
-
     /* TODO: 내가 기대하던 seqnum이 아닌경우 fast retransmit */
 
     /* TODO: 내가 이미 받은 패킷인 경우 fast retransmit */
@@ -502,33 +526,56 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
     std::vector<char> payload(payloadLength);
     packet->readData(TCP_START + info->TCP_HEADER_SIZE, payload.data(),
                      payloadLength);
-    for (auto byte : payload) {
-      socket->receiveBuffer.push_back(byte);
-    }
-    socket->receiveNext += payloadLength;
 
-    /* TODO: read()에서 blocked된 process인지 확인
-     * blocked라면 buf에 데이터 복사 후 여기서 리턴해줘야 함
-     * 이를 위해 blocked handler에 buf의 주소와 크기 정보 저장 필요 */
+    socket->receiveBuffer.push_back(payload);
+    // std::set<std::tuple<struct Socket *, UUID, void *, void *>> toDel;
+
+    /* read()에서 blocked된 process인지 확인 */
     if (!blockedProcessHandler.empty()) {
 
-      for (const auto &setIter : blockedProcessHandler) {
+      for (auto setIter = blockedProcessHandler.begin();
+           setIter != blockedProcessHandler.end();) {
 
-        struct Socket *mySocket = std::get<0>(setIter);
-        UUID syscallUUID = std::get<1>(setIter);
+        struct Socket *mySocket = std::get<0>(*setIter);
+        UUID syscallUUID = std::get<1>(*setIter);
+        void *buf = std::get<2>(*setIter);
+        size_t count = (size_t)(uintptr_t)std::get<3>(*setIter);
 
         if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd)) {
-          /* 읽을 데이터의 크기 설정 후 buf로 데이터 복사 */
-          size_t bytesRead = std::min(*(size_t *)std::get<3>(setIter),
-                                      mySocket->receiveBuffer.size());
-          memcpy(std::get<2>(setIter), mySocket->receiveBuffer.data(),
-                 bytesRead);
-          mySocket->receiveBuffer.erase(mySocket->receiveBuffer.begin(),
-                                        mySocket->receiveBuffer.begin() +
-                                            bytesRead);
-          returnSystemCall(syscallUUID, bytesRead);
+
+          char *data = static_cast<char *>(buf);
+          size_t copiedSize = 0;
+
+          while (!mySocket->receiveBuffer.empty() && copiedSize < count) {
+            std::vector<char> &chunk = mySocket->receiveBuffer.front();
+            size_t remainingSize = count - copiedSize;
+            size_t copySize = std::min(chunk.size(), remainingSize);
+
+            std::copy(chunk.begin(), chunk.begin() + copySize,
+                      data + copiedSize);
+            copiedSize += copySize;
+
+            if (copySize == chunk.size()) {
+              mySocket->receiveBuffer.erase(mySocket->receiveBuffer.begin());
+            } else {
+              chunk.erase(chunk.begin(), chunk.begin() + copySize);
+              // break;
+            }
+          }
+
+          this->returnSystemCall(syscallUUID, copiedSize);
+          setIter = blockedProcessHandler.erase(setIter);
+          // toDel.insert(setIter);
+
+        } else {
+          ++setIter;
         }
       }
+      // if (!toDel.empty()) {
+      //   for (const auto &iter : toDel) {
+      //     blockedProcessHandler.erase(iter);
+      //   }
+      // }
     }
 
     /* 정상적으로 복사완료한 패킷에 대한 ACK 발송 */
@@ -542,6 +589,64 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
     ackInfo->destPort = info->srcPort;
     ackInfo->seqNum = info->ackNum;
     ackInfo->ackNum = info->seqNum + payloadLength;
+
+    ackInfo->flag = ACK;
+    ackInfo->windowSize = info->windowSize;
+
+    writePacket(ackPacket, ackInfo);
+    writeCheckSum(ackPacket);
+
+    this->sendPacket("IPv4", std::move(*ackPacket));
+
+    socket->sentSeq = ackInfo->seqNum;
+    socket->sentAck = ackInfo->ackNum;
+
+    delete ackInfo;
+    ackInfo = nullptr;
+  }
+
+  /* 빈 ACK 패킷인 경우 */
+  else if (ACK & info->flag) {
+    // std::cout << " handleEstab: " << socket << " ";
+
+    if (socket->unAckedPackets.empty()) {
+      // TODO: ack이 왔는데 unackedpacket이 비어있다면???
+      return;
+    }
+    std::cout << "after isempty accept" << std::endl;
+    /* 받은 ack넘버가 예상값과 일치하는 경우 */
+    uint32_t expAck = std::get<0>(socket->unAckedPackets[0]);
+    size_t dataSize = std::get<1>(socket->unAckedPackets[0]);
+    // Packet sentPacket = std::get<2>(socket->unAckedPackets[0]);
+    if (info->ackNum == expAck) {
+      socket->sendNext -= dataSize;
+      socket->windowSize = info->windowSize;
+      socket->unAckedPackets.erase(socket->unAckedPackets.begin());
+    } else {
+      return;
+    }
+
+    /* 보내야 할 데이터가 더 남았는지 확인 */
+    if (!socket->sendBuffer.empty()) {
+      std::cout << "after ack accept resend" << std::endl;
+      sendData(socket);
+    }
+  }
+
+  /* FIN ACK 패킷인 경우 */
+  else if (FIN & info->flag && ACK & info->flag) {
+    // printf("estab handle");
+    /* 정상적으로 복사완료한 패킷에 대한 ACK 발송 */
+    packetInfo *ackInfo = new packetInfo;
+    Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
+    ackInfo->srcIP = info->destIP;
+    ackInfo->destIP = info->srcIP;
+
+    ackInfo->srcPort = info->destPort;
+    ackInfo->destPort = info->srcPort;
+    ackInfo->seqNum = info->ackNum;
+    ackInfo->ackNum = info->seqNum;
     ackInfo->flag = ACK;
     ackInfo->windowSize = info->windowSize;
 
@@ -551,31 +656,7 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
     this->sendPacket("IPv4", std::move(*ackPacket));
 
     delete ackInfo;
-    delete ackPacket;
     ackInfo = nullptr;
-    ackPacket = nullptr;
-  }
-
-  /* FIN 패킷인 경우 */
-  else if (FIN & info->flag) {
-    // printf("estab handle");
-  }
-
-  /* 빈 ACK 패킷인 경우 */
-  else if ((ACK & info->flag) && (payloadLength == 0)) {
-    // ACK 처리: 송신 버퍼에서 확인된 데이터 제거
-    // 정상적인 ACK packet 도착
-    if (info->ackNum == socket->sendBase) {
-      int ackedSize = socket->sendByteVector.front();
-      socket->sendByteVector.erase(socket->sendByteVector.begin());
-      socket->sendBase = socket->sendBase + ackedSize;
-      socket->sendBuffer.erase(socket->sendBuffer.begin(),
-                               socket->sendBuffer.begin() + ackedSize);
-      // 송신 윈도우 업데이트
-      socket->windowSize = info->windowSize;
-    }
-    // 더 보낼 데이터가 있으면 전송
-    sendData(socket);
   }
 
   delete info;
@@ -583,43 +664,53 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 }
 
 void TCPAssignment::sendData(struct Socket *socket) {
-  // 데이터를 보낼 수 있는 조건 확인 (송신 윈도우 내에 있는지)
-  while (!socket->sendBuffer.empty() &&
-         (socket->sendNext < socket->sendBase + socket->windowSize)) {
+  shyo += 1;
+  // std::cout << " sendData: " << socket << " ";
+  while (!socket->sendBuffer.empty()) {
 
-    size_t dataSize =
-        std::min({socket->sendBuffer.size(), MSS,
-                  static_cast<size_t>(socket->windowSize -
-                                      (socket->sendNext - socket->sendBase))});
+    socket->index = 1;
+    size_t dataSize = std::get<3>(socket->sendBuffer.front()).size();
+    size_t currWndEdge = socket->windowSize;
+    size_t neededEdge = socket->sendNext + dataSize;
 
-    packetInfo *dataInfo = new packetInfo;
-    Packet *dataPacket = new Packet(DEFAULT_HEADER_SIZE + dataSize);
+    if (currWndEdge > neededEdge) {
+      size_t packetSize = DEFAULT_HEADER_SIZE + dataSize;
 
-    dataInfo->srcIP = socket->myAddr->sin_addr.s_addr;
-    dataInfo->destIP = socket->connectedAddr->sin_addr.s_addr,
+      packetInfo *dataInfo = new packetInfo;
+      Packet *dataPacket = new Packet(packetSize);
 
-    dataInfo->srcPort = socket->myAddr->sin_port,
-    dataInfo->destPort = socket->connectedAddr->sin_port;
-    dataInfo->seqNum = socket->sentSeq + 1;
-    dataInfo->ackNum = socket->sentAck;
-    dataInfo->flag = ACK;
+      dataInfo->srcIP = socket->myAddr->sin_addr.s_addr;
+      dataInfo->destIP = socket->connectedAddr->sin_addr.s_addr,
 
-    writePacket(dataPacket, dataInfo);
-    dataPacket->writeData(DEFAULT_HEADER_SIZE, socket->sendBuffer.data(),
-                          dataSize);
-    writeCheckSum(dataPacket);
+      dataInfo->srcPort = socket->myAddr->sin_port,
+      dataInfo->destPort = socket->connectedAddr->sin_port;
+      dataInfo->seqNum = socket->sentSeq + socket->sentSize;
+      dataInfo->ackNum = socket->sentAck;
+      dataInfo->flag = ACK;
 
-    // 패킷 전송
-    this->sendPacket("IPv4", std::move(*dataPacket));
+      writePacket(dataPacket, dataInfo);
+      dataPacket->writeData(DEFAULT_HEADER_SIZE,
+                            std::get<3>(socket->sendBuffer.front()).data(),
+                            dataSize);
+      writeCheckSum(dataPacket);
 
-    socket->sendNext += dataSize;
-    socket->sentSeq = dataInfo->seqNum;
-    socket->sentAck = dataInfo->ackNum;
+      this->sendPacket("IPv4", std::move(*dataPacket));
 
-    delete dataInfo;
-    delete dataPacket;
-    dataInfo = nullptr;
-    dataPacket = nullptr;
+      socket->sentSize = dataSize;
+      socket->sendNext += packetSize;
+      socket->sentSeq = dataInfo->seqNum;
+      socket->sentAck = dataInfo->ackNum;
+      socket->sendBuffer.erase(socket->sendBuffer.begin());
+
+      uint32_t expectedAck = socket->sentSeq + dataSize;
+      Packet sentPacket = dataPacket->clone();
+      socket->unAckedPackets.emplace_back(expectedAck, dataSize, sentPacket);
+
+      delete dataInfo;
+      dataInfo = nullptr;
+    } else {
+      return;
+    }
   }
 }
 
@@ -640,6 +731,10 @@ void TCPAssignment::deleteSocket(struct Socket *socket) {
 
 void TCPAssignment::timerCallback(std::any payload) {
   // Remove below
+  /* unAckedPackets
+  | socket
+  |
+  */
 }
 
 void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
@@ -928,12 +1023,15 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   synInfo->seqNum = distrib(gen);
   synInfo->flag = SYN;
 
-  mySocket->expectedAck = synInfo->seqNum + 1;
-
   writePacket(synPacket, synInfo);
   writeCheckSum(synPacket);
 
   this->sendPacket("IPv4", std::move(*synPacket));
+
+  // syn TIMER 생성
+  // 타이머 새로 생성 : UUID synTimer = addTimer(payload, RTT)
+  // 보낸 시점 기록 : getCurrentTime()
+  // (타이머 UUID, 보낸 시점, expected Ack, datasize, clone 된 패킷)
 
   /* implicit binding */
   if (!mySocket->bound) {
@@ -943,12 +1041,12 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
     mySocket->myAddr->sin_family = AF_INET;
     mySocket->bound = true;
   }
+
   mySocket->socketState = SocketState::SYN_SENT;
+  mySocket->sentSeq = synInfo->seqNum;
 
   delete synInfo;
-  delete synPacket;
   synInfo = nullptr;
-  synPacket = nullptr;
 }
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
@@ -992,9 +1090,15 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   newMySocket->protocol = mySocket->protocol;
   newMySocket->pid = mySocket->pid;
   newMySocket->fd = newMySockFd;
+
+  newMySocket->bound = true;
   newMySocket->socketState = SocketState::ESTABLISHED;
+
   newMySocket->myAddr = mySocket->myAddr;
   newMySocket->connectedAddr = std::get<1>(request);
+
+  newMySocket->sentSeq = mySocket->sentSeq;
+  newMySocket->sentAck = mySocket->sentAck;
 
   socketSet.insert(newMySocket);
 
@@ -1081,18 +1185,33 @@ void TCPAssignment::syscall_read(UUID syscallUUID, int pid, int fd, void *buf,
 
   /* recieveBuffer가 비어있다면 읽을 데이터가 도착할 때까지 block */
   if (mySocket->receiveBuffer.empty()) {
+    void *ptr = (void *)(uintptr_t)count; // size_t에서 void*로 변환
     blockedProcessHandler.insert(
-        std::make_tuple(mySocket, syscallUUID, buf, (void *)&count));
+        std::make_tuple(mySocket, syscallUUID, buf, ptr));
     return;
   }
 
-  /* 읽을 데이터의 크기 설정 후 buf로 데이터 복사 */
-  size_t bytesRead = std::min(count, mySocket->receiveBuffer.size());
-  memcpy(buf, mySocket->receiveBuffer.data(), bytesRead);
-  mySocket->receiveBuffer.erase(mySocket->receiveBuffer.begin(),
-                                mySocket->receiveBuffer.begin() + bytesRead);
+  /* buf가 수용할 수 있는 만큼 데이터를 복사, 나머지는 receive버퍼에 유지 */
+  char *data = static_cast<char *>(buf);
+  size_t copiedSize = 0;
 
-  this->returnSystemCall(syscallUUID, bytesRead);
+  while (!mySocket->receiveBuffer.empty() && copiedSize < count) {
+    std::vector<char> &chunk = mySocket->receiveBuffer.front();
+    size_t remainingSize = count - copiedSize;
+    size_t copySize = std::min(chunk.size(), remainingSize);
+
+    std::copy(chunk.begin(), chunk.begin() + copySize, data + copiedSize);
+    copiedSize += copySize;
+
+    if (copySize == chunk.size()) {
+      mySocket->receiveBuffer.erase(mySocket->receiveBuffer.begin());
+    } else {
+      chunk.erase(chunk.begin(), chunk.begin() + copySize);
+      // break;
+    }
+  }
+
+  this->returnSystemCall(syscallUUID, copiedSize);
 }
 
 void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd,
@@ -1115,11 +1234,28 @@ void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd,
 
   /* buf에 있는 데이터를 sendBuffer로 복사 */
   const char *data = static_cast<const char *>(buf);
-  mySocket->sendBuffer.insert(mySocket->sendBuffer.end(), data, data + count);
+  size_t remaining = count;
+  size_t offset = 0;
+
+  /* 최대 크기 512바이트의 청크로 나누어서 저장 */
+  while (remaining > 0) {
+    size_t chunkSize = std::min(remaining, static_cast<size_t>(512));
+    std::vector<char> chunk(data + offset, data + offset + chunkSize);
+
+    remaining -= chunkSize;
+    offset += chunkSize;
+
+    if (offset != count) {
+      mySocket->sendBuffer.emplace_back(false, syscallUUID, count, chunk);
+    } else {
+      mySocket->sendBuffer.emplace_back(true, syscallUUID, count, chunk);
+    }
+  }
+
+  this->returnSystemCall(syscallUUID, count);
 
   /* sendBuffer에 있는 데이터를 패킷으로 만들어 발송 */
   sendData(mySocket);
-  this->returnSystemCall(syscallUUID, count);
 }
 
 } // namespace E
