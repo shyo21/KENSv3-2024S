@@ -39,8 +39,6 @@ enum class SocketState {
 
 /*Basic socket information*/
 struct Socket {
-  int index = 0;
-
   int domain;       /*AF_INET*/
   int type;         /*SOCK_STREAM*/
   int protocol;     /*IPPROTO_TCP*/
@@ -51,11 +49,10 @@ struct Socket {
   bool bound = false;      /*check if bound*/
   SocketState socketState; /*sockstate*/
 
-  struct sockaddr_in *myAddr = nullptr;        /*bindaddr*/
-  struct sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
-  std::queue<Packet> listeningQueue;           /*with backlog size*/
-  std::queue<std::tuple<struct sockaddr_in *, struct sockaddr_in *>>
-      acceptQueue;
+  sockaddr_in *myAddr = nullptr;        /*bindaddr*/
+  sockaddr_in *connectedAddr = nullptr; /*peeraddr*/
+  std::queue<Packet> listeningQueue;    /*with backlog size*/
+  std::queue<std::tuple<sockaddr_in *, sockaddr_in *>> acceptQueue;
 
   std::vector<std::tuple<bool, UUID, size_t, std::vector<char>>> sendBuffer;
   std::vector<std::vector<char>> receiveBuffer;
@@ -70,6 +67,24 @@ struct Socket {
 
   uint32_t sentSeq;
   uint32_t sentAck;
+};
+
+enum class blockedState { CONNECT, ACCEPT, READ, WRITE, CLOSE };
+struct blockedProcess {
+  /* 이 프로세스가 어디서 생성되었는가 */
+  blockedState type;
+
+  Socket *socket = nullptr;
+  UUID uuid;
+
+  /* for handshake */
+  sockaddr_in *addr = nullptr;
+  socklen_t addrlen;
+  socklen_t *addrlenptr = nullptr;
+
+  /* for data transfer */
+  void *buf = nullptr;
+  size_t count;
 };
 
 struct packetInfo {
@@ -106,10 +121,8 @@ class TCPAssignment : public HostModule,
 private:
   virtual void timerCallback(std::any payload) final;
 
-  std::set<struct Socket *> socketSet; /*sockets*/
-  std::set<std::tuple<struct Socket *, UUID, void *, void *>>
-      blockedProcessHandler; /*blocked processes*/
-  int shyo = 0;
+  std::set<Socket *> socketSet;            /*sockets*/
+  std::set<blockedProcess *> blockHandler; /*blocked processes*/
 
 public:
   TCPAssignment(Host &host);
@@ -122,25 +135,25 @@ public:
   void writePacket(Packet *, packetInfo *);
   void writeCheckSum(Packet *);
 
-  struct Socket *getSocket(std::pair<uint32_t, in_port_t>,
-                           std::pair<uint32_t, in_port_t>);
+  Socket *getSocket(std::pair<uint32_t, in_port_t>,
+                    std::pair<uint32_t, in_port_t>);
 
-  void handleSYNSent(Packet *, struct Socket *);
-  void handleListening(Packet *, struct Socket *);
-  void handleSYNRcvd(Packet *, struct Socket *);
-  void handleEstab(Packet *, struct Socket *);
+  void handleSYNSent(Packet *, Socket *);
+  void handleListening(Packet *, Socket *);
+  void handleSYNRcvd(Packet *, Socket *);
+  void handleEstab(Packet *, Socket *);
 
-  void sendData(struct Socket *);
-  void deleteSocket(struct Socket *);
+  void sendData(Socket *);
+  void deleteSocket(Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
   void syscall_close(UUID, int, int);
-  void syscall_bind(UUID, int, int, const struct sockaddr *, socklen_t);
-  void syscall_getsockname(UUID, int, int, struct sockaddr *, socklen_t *);
+  void syscall_bind(UUID, int, int, const sockaddr *, socklen_t);
+  void syscall_getsockname(UUID, int, int, sockaddr *, socklen_t *);
   void syscall_listen(UUID, int, int, int);
-  void syscall_connect(UUID, int, int, const struct sockaddr *, socklen_t);
-  void syscall_accept(UUID, int, int, struct sockaddr *, socklen_t *);
-  void syscall_getpeername(UUID, int, int, struct sockaddr *, socklen_t *);
+  void syscall_connect(UUID, int, int, const sockaddr *, socklen_t);
+  void syscall_accept(UUID, int, int, sockaddr *, socklen_t *);
+  void syscall_getpeername(UUID, int, int, sockaddr *, socklen_t *);
   void syscall_read(UUID, int, int, void *, size_t);
   void syscall_write(UUID, int, int, const void *, size_t);
 

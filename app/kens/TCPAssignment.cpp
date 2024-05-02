@@ -51,7 +51,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid,
   case CONNECT:
     this->syscall_connect(
         syscallUUID, pid, std::get<int>(param.params[0]),
-        static_cast<struct sockaddr *>(std::get<void *>(param.params[1])),
+        static_cast<sockaddr *>(std::get<void *>(param.params[1])),
         (socklen_t)std::get<int>(param.params[2]));
     break;
   case LISTEN:
@@ -61,25 +61,25 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid,
   case ACCEPT:
     this->syscall_accept(
         syscallUUID, pid, std::get<int>(param.params[0]),
-        static_cast<struct sockaddr *>(std::get<void *>(param.params[1])),
+        static_cast<sockaddr *>(std::get<void *>(param.params[1])),
         static_cast<socklen_t *>(std::get<void *>(param.params[2])));
     break;
   case BIND:
     this->syscall_bind(
         syscallUUID, pid, std::get<int>(param.params[0]),
-        static_cast<struct sockaddr *>(std::get<void *>(param.params[1])),
+        static_cast<sockaddr *>(std::get<void *>(param.params[1])),
         (socklen_t)std::get<int>(param.params[2]));
     break;
   case GETSOCKNAME:
     this->syscall_getsockname(
         syscallUUID, pid, std::get<int>(param.params[0]),
-        static_cast<struct sockaddr *>(std::get<void *>(param.params[1])),
+        static_cast<sockaddr *>(std::get<void *>(param.params[1])),
         static_cast<socklen_t *>(std::get<void *>(param.params[2])));
     break;
   case GETPEERNAME:
     this->syscall_getpeername(
         syscallUUID, pid, std::get<int>(param.params[0]),
-        static_cast<struct sockaddr *>(std::get<void *>(param.params[1])),
+        static_cast<sockaddr *>(std::get<void *>(param.params[1])),
         static_cast<socklen_t *>(std::get<void *>(param.params[2])));
     break;
   default:
@@ -183,15 +183,15 @@ void TCPAssignment::writeCheckSum(Packet *packet) {
 }
 
 /* 패킷에 담긴 ip-port 쌍을 이용해 적합한 소켓 선택 */
-struct Socket *
-TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> destAddrPair,
-                         std::pair<uint32_t, in_port_t> srcAddrPair) {
+Socket *TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> destAddrPair,
+                                 std::pair<uint32_t, in_port_t> srcAddrPair) {
   uint32_t destIP = std::get<0>(destAddrPair);
   in_port_t destPort = std::get<1>(destAddrPair);
   uint32_t srcIP = std::get<0>(srcAddrPair);
   in_port_t srcPort = std::get<1>(srcAddrPair);
 
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
+
   for (const auto &setIter : socketSet) {
 
     /* 소켓의 상태가 ESTAB인 경우: ip-port쌍 둘 다 확인해야 함 */
@@ -221,7 +221,6 @@ TCPAssignment::getSocket(std::pair<uint32_t, in_port_t> destAddrPair,
         if ((iterDestIP == destIP) || (iterDestIP == INADDR_ANY) ||
             (destIP == INADDR_ANY)) {
           mySocket = setIter;
-          break;
         }
       }
     }
@@ -239,7 +238,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   /* socketSet 탐색을 통해 적합한 소켓 선택 */
   srcAddrPair = std::make_pair(info->srcIP, info->srcPort);
   destAddrPair = std::make_pair(info->destIP, info->destPort);
-  struct Socket *mySocket = getSocket(destAddrPair, srcAddrPair);
+  Socket *mySocket = getSocket(destAddrPair, srcAddrPair);
   if (mySocket == nullptr) {
     // printf("packetArrived(): cannot find socket\n");
     return;
@@ -267,7 +266,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   info = nullptr;
 }
 
-void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
+void TCPAssignment::handleListening(Packet *packet, Socket *socket) {
   /* 패킷에서 필요한 정보 추출: host-order */
   packetInfo *info = new packetInfo;
   readPacket(packet, info);
@@ -320,7 +319,7 @@ void TCPAssignment::handleListening(Packet *packet, struct Socket *socket) {
   info = nullptr;
 }
 
-void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
+void TCPAssignment::handleSYNSent(Packet *packet, Socket *socket) {
   /* 패킷에서 필요한 정보 추출: host-order */
   packetInfo *info = new packetInfo;
   readPacket(packet, info);
@@ -359,7 +358,7 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     this->sendPacket("IPv4", std::move(*ackPacket));
 
     /* 소켓 정보 설정 */
-    socket->connectedAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+    socket->connectedAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
     memset(socket->connectedAddr, 0, sizeof(sockaddr_in));
     socket->connectedAddr->sin_addr.s_addr = info->srcIP;
     socket->connectedAddr->sin_port = info->srcPort;
@@ -368,18 +367,26 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
     socket->socketState = SocketState::ESTABLISHED;
     socket->sentSeq = ackInfo->seqNum;
     socket->sentAck = ackInfo->ackNum;
-    // socket->nextSeq = ackInfo->seqNum;
 
-    /* 내가 처리한게 blocked process인지 확인 */
-    auto blockedIter =
-        std::find_if(blockedProcessHandler.begin(), blockedProcessHandler.end(),
-                     [socket](const auto &blockedTuple) {
-                       return std::get<0>(blockedTuple) == socket;
-                     });
-    if (blockedIter != blockedProcessHandler.end()) {
-      this->returnSystemCall(std::get<1>(*blockedIter), 0);
-      blockedProcessHandler.erase(blockedIter);
-      return;
+    /* 처리한게 connect에서 block된 프로세스인지 확인 */
+    if (!blockHandler.empty()) {
+
+      for (const auto &setIter : blockHandler) {
+
+        Socket *mySocket = setIter->socket;
+        UUID syscallUUID = setIter->uuid;
+
+        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd) &&
+            setIter->type == blockedState::CONNECT) {
+
+          this->returnSystemCall(syscallUUID, 0);
+
+          blockHandler.erase(setIter);
+          delete setIter;
+
+          break;
+        }
+      }
     }
 
     delete ackInfo;
@@ -390,19 +397,17 @@ void TCPAssignment::handleSYNSent(Packet *packet, struct Socket *socket) {
   info = nullptr;
 }
 
-void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
+void TCPAssignment::handleSYNRcvd(Packet *packet, Socket *socket) {
   /* 패킷에서 필요한 정보 추출: host-order */
   packetInfo *info = new packetInfo;
   readPacket(packet, info);
 
-  struct sockaddr_in *myAddr =
-      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  sockaddr_in *myAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
   myAddr->sin_family = AF_INET;
   myAddr->sin_addr.s_addr = info->destIP;
   myAddr->sin_port = info->destPort;
 
-  struct sockaddr_in *peerAddr =
-      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  sockaddr_in *peerAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
   peerAddr->sin_family = AF_INET;
   peerAddr->sin_addr.s_addr = info->srcIP;
   peerAddr->sin_port = info->srcPort;
@@ -427,14 +432,16 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
     // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
 
     /* 만약 block된 accept 프로세스가 있다면 여기서 처리 */
-    if (!blockedProcessHandler.empty()) {
+    if (!blockHandler.empty()) {
 
-      for (const auto &setIter : blockedProcessHandler) {
+      for (const auto &setIter : blockHandler) {
 
-        struct Socket *mySocket = std::get<0>(setIter);
-        UUID syscallUUID = std::get<1>(setIter);
+        Socket *mySocket = setIter->socket;
+        UUID syscallUUID = setIter->uuid;
 
-        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd)) {
+        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd) &&
+            setIter->type == blockedState::ACCEPT) {
+
           int newMySockFd = createFileDescriptor(mySocket->pid);
           if (newMySockFd < 0) {
             this->returnSystemCall(syscallUUID, -1);
@@ -442,7 +449,7 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
           }
 
           /* 클라이언트와 연결될 새 소켓 */
-          struct Socket *newMySocket = new Socket;
+          Socket *newMySocket = new Socket;
           newMySocket->domain = mySocket->domain;
           newMySocket->type = mySocket->type;
           newMySocket->protocol = mySocket->protocol;
@@ -459,26 +466,27 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
           newMySocket->sentAck = mySocket->sentAck;
 
           /* 소켓에 저장된 addr 추출: network-order */
-          if ((sockaddr_in *)std::get<2>(setIter) != nullptr &&
-              *(socklen_t *)std::get<3>(setIter) >= sizeof(sockaddr_in) &&
+          if (setIter->addr != nullptr &&
+              *(setIter->addrlenptr) >= sizeof(sockaddr_in) &&
               myAddr != nullptr) {
-            struct sockaddr_in *addrtoN =
-                (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+
+            sockaddr_in *addrtoN = (sockaddr_in *)malloc(sizeof(sockaddr_in));
             addrtoN->sin_addr.s_addr = htonl(myAddr->sin_addr.s_addr);
             addrtoN->sin_port = htons(myAddr->sin_port);
             addrtoN->sin_family = AF_INET;
 
             /* 추출한 addr 복사 */
-            memcpy((sockaddr_in *)std::get<2>(setIter), addrtoN,
-                   *(socklen_t *)std::get<3>(setIter));
+            memcpy(setIter->addr, addrtoN, *(setIter->addrlenptr));
             free(addrtoN);
 
             /* 새로 생성한 소켓 추가 */
             socketSet.insert(newMySocket);
-            /* 처리한 blocked process 삭제 */
-            blockedProcessHandler.erase(setIter);
-            /* 처리한 결과 return */
+
             this->returnSystemCall(syscallUUID, newMySockFd);
+
+            blockHandler.erase(setIter);
+            delete setIter;
+
             break;
           }
         }
@@ -504,7 +512,7 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, struct Socket *socket) {
   info = nullptr;
 }
 
-void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
+void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
   /* 패킷에서 정보 읽어오기 */
   packetInfo *info = new packetInfo;
   readPacket(packet, info);
@@ -528,20 +536,22 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
                      payloadLength);
 
     socket->receiveBuffer.push_back(payload);
-    // std::set<std::tuple<struct Socket *, UUID, void *, void *>> toDel;
 
     /* read()에서 blocked된 process인지 확인 */
-    if (!blockedProcessHandler.empty()) {
+    if (!blockHandler.empty()) {
 
-      for (auto setIter = blockedProcessHandler.begin();
-           setIter != blockedProcessHandler.end();) {
+      for (auto setIter = blockHandler.begin();
+           setIter != blockHandler.end();) {
 
-        struct Socket *mySocket = std::get<0>(*setIter);
-        UUID syscallUUID = std::get<1>(*setIter);
-        void *buf = std::get<2>(*setIter);
-        size_t count = (size_t)(uintptr_t)std::get<3>(*setIter);
+        blockedProcess *readBlock = *setIter;
 
-        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd)) {
+        Socket *mySocket = readBlock->socket;
+        UUID syscallUUID = readBlock->uuid;
+        void *buf = readBlock->buf;
+        size_t count = readBlock->count;
+
+        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd) &&
+            readBlock->type == blockedState::READ) {
 
           char *data = static_cast<char *>(buf);
           size_t copiedSize = 0;
@@ -559,23 +569,18 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
               mySocket->receiveBuffer.erase(mySocket->receiveBuffer.begin());
             } else {
               chunk.erase(chunk.begin(), chunk.begin() + copySize);
-              // break;
             }
           }
 
           this->returnSystemCall(syscallUUID, copiedSize);
-          setIter = blockedProcessHandler.erase(setIter);
-          // toDel.insert(setIter);
+
+          setIter = blockHandler.erase(setIter);
+          delete readBlock;
 
         } else {
           ++setIter;
         }
       }
-      // if (!toDel.empty()) {
-      //   for (const auto &iter : toDel) {
-      //     blockedProcessHandler.erase(iter);
-      //   }
-      // }
     }
 
     /* 정상적으로 복사완료한 패킷에 대한 ACK 발송 */
@@ -607,13 +612,10 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
   /* 빈 ACK 패킷인 경우 */
   else if (ACK & info->flag) {
-    // std::cout << " handleEstab: " << socket << " ";
-
     if (socket->unAckedPackets.empty()) {
       // TODO: ack이 왔는데 unackedpacket이 비어있다면???
       return;
     }
-    std::cout << "after isempty accept" << std::endl;
     /* 받은 ack넘버가 예상값과 일치하는 경우 */
     uint32_t expAck = std::get<0>(socket->unAckedPackets[0]);
     size_t dataSize = std::get<1>(socket->unAckedPackets[0]);
@@ -628,8 +630,33 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
 
     /* 보내야 할 데이터가 더 남았는지 확인 */
     if (!socket->sendBuffer.empty()) {
-      std::cout << "after ack accept resend" << std::endl;
       sendData(socket);
+    }
+
+    else {
+      if (!blockHandler.empty()) {
+        for (const auto &setIter : blockHandler) {
+          Socket *mySocket = setIter->socket;
+          UUID syscallUUID = setIter->uuid;
+          int pid = socket->pid;
+          int fd = socket->fd;
+
+          if ((mySocket->pid == pid) && (mySocket->fd == fd) &&
+              setIter->type == blockedState::CLOSE) {
+
+            // socketSet.erase(mySocket);
+            // deleteSocket(mySocket);
+            // this->removeFileDescriptor(pid, fd);
+
+            this->returnSystemCall(syscallUUID, 0);
+
+            blockHandler.erase(setIter);
+            delete setIter;
+
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -663,12 +690,9 @@ void TCPAssignment::handleEstab(Packet *packet, struct Socket *socket) {
   info = nullptr;
 }
 
-void TCPAssignment::sendData(struct Socket *socket) {
-  shyo += 1;
-  // std::cout << " sendData: " << socket << " ";
+void TCPAssignment::sendData(Socket *socket) {
   while (!socket->sendBuffer.empty()) {
 
-    socket->index = 1;
     size_t dataSize = std::get<3>(socket->sendBuffer.front()).size();
     size_t currWndEdge = socket->windowSize;
     size_t neededEdge = socket->sendNext + dataSize;
@@ -714,7 +738,7 @@ void TCPAssignment::sendData(struct Socket *socket) {
   }
 }
 
-void TCPAssignment::deleteSocket(struct Socket *socket) {
+void TCPAssignment::deleteSocket(Socket *socket) {
   if (socket == nullptr)
     return;
 
@@ -774,7 +798,7 @@ void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -787,6 +811,18 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
     return;
   }
 
+  if (!mySocket->sendBuffer.empty() || !mySocket->unAckedPackets.empty()) {
+
+    blockedProcess *closeBlock = new blockedProcess;
+
+    closeBlock->type = blockedState::CLOSE;
+    closeBlock->socket = mySocket;
+    closeBlock->uuid = syscallUUID;
+
+    blockHandler.insert(closeBlock);
+    return;
+  }
+
   socketSet.erase(mySocket);
   deleteSocket(mySocket);
   this->removeFileDescriptor(pid, fd);
@@ -795,10 +831,9 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd) {
 }
 
 void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
-                                 const struct sockaddr *addr,
-                                 socklen_t addrlen) {
+                                 const sockaddr *addr, socklen_t addrlen) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -821,9 +856,8 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
   }
 
   /* 바인딩할 addr 획득: host-order */
-  struct sockaddr_in *toBindAddr =
-      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
-  struct sockaddr_in *addr_ = (sockaddr_in *)(addr);
+  sockaddr_in *toBindAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
+  sockaddr_in *addr_ = (sockaddr_in *)(addr);
   toBindAddr->sin_addr.s_addr = ntohl(addr_->sin_addr.s_addr);
   toBindAddr->sin_port = ntohs(addr_->sin_port);
   toBindAddr->sin_family = AF_INET;
@@ -849,7 +883,7 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
   }
 
   /* 소켓 정보 변경 */
-  mySocket->myAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  mySocket->myAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
   memcpy(mySocket->myAddr, toBindAddr, sizeof(sockaddr_in));
   mySocket->bound = true;
 
@@ -858,10 +892,9 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int fd,
 }
 
 void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int fd,
-                                        struct sockaddr *addr,
-                                        socklen_t *addrlen) {
+                                        sockaddr *addr, socklen_t *addrlen) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -889,15 +922,14 @@ void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int fd,
   }
 
   /* 소켓에 저장된 addr 추출: network-order */
-  struct sockaddr_in *addrtoN =
-      (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+  sockaddr_in *addrtoN = (sockaddr_in *)malloc(sizeof(sockaddr_in));
   addrtoN->sin_addr.s_addr = htonl(mySocket->myAddr->sin_addr.s_addr);
   addrtoN->sin_port = htons(mySocket->myAddr->sin_port);
   addrtoN->sin_family = AF_INET;
 
   /* 추출한 addr 복사 */
-  memcpy(addr, addrtoN, sizeof(struct sockaddr_in));
-  *addrlen = sizeof(struct sockaddr_in);
+  memcpy(addr, addrtoN, sizeof(sockaddr_in));
+  *addrlen = sizeof(sockaddr_in);
 
   free(addrtoN);
   this->returnSystemCall(syscallUUID, 0);
@@ -906,7 +938,7 @@ void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int fd,
 void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int fd,
                                    int backlog) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -936,10 +968,9 @@ void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int fd,
 }
 
 void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
-                                    const struct sockaddr *addr,
-                                    socklen_t addrlen) {
+                                    const sockaddr *addr, socklen_t addrlen) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -957,12 +988,20 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   }
 
   /* 일단 blockedProcess로 설정 */
-  struct sockaddr *addr_ = (struct sockaddr *)addr;
-  blockedProcessHandler.insert(
-      std::make_tuple(mySocket, syscallUUID, (void *)addr_, (void *)&addrlen));
+  blockedProcess *connectBlock = new blockedProcess;
+
+  connectBlock->type = blockedState::CONNECT;
+  connectBlock->socket = mySocket;
+  connectBlock->uuid = syscallUUID;
+
+  connectBlock->addr =
+      reinterpret_cast<sockaddr_in *>(const_cast<sockaddr *>(addr));
+  connectBlock->addrlen = addrlen;
+
+  blockHandler.insert(connectBlock);
 
   /* 연결대상의 ip-port 획득: host-order */
-  const struct sockaddr_in *peerAddr = (const struct sockaddr_in *)addr;
+  const sockaddr_in *peerAddr = (const sockaddr_in *)addr;
   uint32_t peerIP = ntohl(peerAddr->sin_addr.s_addr);
   in_port_t peerPort = ntohs(peerAddr->sin_port);
   uint32_t myIP;
@@ -1035,7 +1074,7 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
 
   /* implicit binding */
   if (!mySocket->bound) {
-    mySocket->myAddr = (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+    mySocket->myAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
     mySocket->myAddr->sin_addr.s_addr = myIP;
     mySocket->myAddr->sin_port = myPort;
     mySocket->myAddr->sin_family = AF_INET;
@@ -1050,9 +1089,9 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
 }
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
-                                   struct sockaddr *addr, socklen_t *addrlen) {
+                                   sockaddr *addr, socklen_t *addrlen) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -1065,14 +1104,22 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   }
   /* acceptQueue가 비었으면 blockedprocess로 설정 */
   if (mySocket->acceptQueue.empty()) {
-    blockedProcessHandler.insert(
-        std::make_tuple(mySocket, syscallUUID, (void *)addr, (void *)addrlen));
-    // printf("blocking accept\n");
+
+    blockedProcess *acceptBlock = new blockedProcess;
+
+    acceptBlock->type = blockedState::ACCEPT;
+    acceptBlock->socket = mySocket;
+    acceptBlock->uuid = syscallUUID;
+
+    acceptBlock->addr = reinterpret_cast<sockaddr_in *>(addr);
+    acceptBlock->addrlenptr = addrlen;
+
+    blockHandler.insert(acceptBlock);
     return;
   }
 
   /* acceptQueue에서 요청 추출 */
-  std::tuple<struct sockaddr_in *, struct sockaddr_in *> request =
+  std::tuple<sockaddr_in *, sockaddr_in *> request =
       mySocket->acceptQueue.front();
   mySocket->acceptQueue.pop();
 
@@ -1084,7 +1131,7 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   }
 
   /* 새로운 소켓: 기본적으로 내 clone, with modifications */
-  struct Socket *newMySocket = new Socket;
+  Socket *newMySocket = new Socket;
   newMySocket->domain = mySocket->domain;
   newMySocket->type = mySocket->type;
   newMySocket->protocol = mySocket->protocol;
@@ -1105,8 +1152,7 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
   /* 소켓에 저장된 addr 추출: network-order */
   if (addr != nullptr && addrlen != nullptr &&
       *addrlen >= sizeof(sockaddr_in)) {
-    struct sockaddr_in *addrtoN =
-        (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+    sockaddr_in *addrtoN = (sockaddr_in *)malloc(sizeof(sockaddr_in));
     addrtoN->sin_addr.s_addr = htonl(newMySocket->myAddr->sin_addr.s_addr);
     addrtoN->sin_port = htons(newMySocket->myAddr->sin_port);
     addrtoN->sin_family = AF_INET;
@@ -1123,10 +1169,9 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int fd,
 }
 
 void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd,
-                                        struct sockaddr *addr,
-                                        socklen_t *addrlen) {
+                                        sockaddr *addr, socklen_t *addrlen) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -1145,8 +1190,7 @@ void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd,
   /* 소켓에 저장된 addr 추출: network-order */
   if (addr != nullptr && addrlen != nullptr &&
       *addrlen >= sizeof(sockaddr_in)) {
-    struct sockaddr_in *addrtoN =
-        (struct sockaddr_in *)malloc(sizeof(sockaddr_in));
+    sockaddr_in *addrtoN = (sockaddr_in *)malloc(sizeof(sockaddr_in));
     addrtoN->sin_addr.s_addr = htonl(mySocket->connectedAddr->sin_addr.s_addr);
     addrtoN->sin_port = htons(mySocket->connectedAddr->sin_port);
     addrtoN->sin_family = AF_INET;
@@ -1168,7 +1212,7 @@ void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int fd,
 void TCPAssignment::syscall_read(UUID syscallUUID, int pid, int fd, void *buf,
                                  size_t count) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
@@ -1185,9 +1229,18 @@ void TCPAssignment::syscall_read(UUID syscallUUID, int pid, int fd, void *buf,
 
   /* recieveBuffer가 비어있다면 읽을 데이터가 도착할 때까지 block */
   if (mySocket->receiveBuffer.empty()) {
-    void *ptr = (void *)(uintptr_t)count; // size_t에서 void*로 변환
-    blockedProcessHandler.insert(
-        std::make_tuple(mySocket, syscallUUID, buf, ptr));
+
+    blockedProcess *readBlock = new blockedProcess;
+
+    readBlock->type = blockedState::READ;
+    readBlock->socket = mySocket;
+    readBlock->uuid = syscallUUID;
+
+    readBlock->buf = buf;
+    readBlock->count = count;
+
+    blockHandler.insert(readBlock);
+
     return;
   }
 
@@ -1217,7 +1270,7 @@ void TCPAssignment::syscall_read(UUID syscallUUID, int pid, int fd, void *buf,
 void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd,
                                   const void *buf, size_t count) {
   /* 소켓 탐색 */
-  struct Socket *mySocket = nullptr;
+  Socket *mySocket = nullptr;
   for (const auto &setIter : socketSet) {
     if ((setIter->pid == pid) && (setIter->fd == fd)) {
       mySocket = setIter;
