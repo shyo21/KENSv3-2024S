@@ -171,7 +171,7 @@ void TCPAssignment::writeCheckSum(Packet *packet) {
   packet->readData(IP_START + 12, &nsrcIP, 4);
   packet->readData(IP_START + 16, &ndestIP, 4);
 
-  size_t TCP_START = ETHERNET_HEADER_SIZE + 20;
+  size_t TCP_START = IP_START + 20;
   size_t TCP_SIZE = PACKET_SIZE - TCP_START;
 
   uint8_t tcpSeg[TCP_SIZE];
@@ -180,6 +180,27 @@ void TCPAssignment::writeCheckSum(Packet *packet) {
   ncheckSum = htons(checkSum);
 
   packet->writeData(TCP_START + 16, &ncheckSum, 2);
+}
+
+bool TCPAssignment::isCheckSum(Packet *packet) {
+  uint32_t nsrcIP, ndestIP;
+  uint16_t ncheckSum, rcvCheckSum, calCheckSum, masking;
+  uint8_t nihl;
+
+  size_t PACKET_SIZE = packet->getSize();
+
+  size_t IP_START = ETHERNET_HEADER_SIZE;
+  packet->readData(IP_START + 12, &nsrcIP, 4);
+  packet->readData(IP_START + 16, &ndestIP, 4);
+
+  size_t TCP_START = IP_START + 20;
+  size_t TCP_SIZE = PACKET_SIZE - TCP_START;
+
+  uint8_t tcpSeg[TCP_SIZE];
+  packet->readData(TCP_START, tcpSeg, TCP_SIZE);
+  calCheckSum = NetworkUtil::tcp_sum(nsrcIP, ndestIP, tcpSeg, TCP_SIZE);
+
+  return 0xFFFF == calCheckSum;
 }
 
 /* 패킷에 담긴 ip-port 쌍을 이용해 적합한 소켓 선택 */
@@ -243,6 +264,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     // printf("packetArrived(): cannot find socket\n");
     return;
   }
+  if (!isCheckSum(&packet)) {
+    return;
+  }
 
   /* 선택한 소켓의 상태 패턴 매칭 */
   switch (mySocket->socketState) {
@@ -296,12 +320,20 @@ void TCPAssignment::handleListening(Packet *packet, Socket *socket) {
     writeCheckSum(synackPacket);
 
     /* SYN-ACK 패킷 송신 */
+    Packet *clonePacket = new Packet(synackPacket->clone());
     this->sendPacket("IPv4", std::move(*synackPacket));
 
-    // synack TIMER 생성
-    // 타이머 새로 생성 : UUID synTimer = addTimer(payload, RTT)
-    // 보낸 시점 기록 : getCurrentTime()
-    // (타이머 UUID, 보낸 시점, expected Ack, datasize, clone 된 패킷)
+    /* synack TIMER 생성 */
+    unackedInfo *u_info = new unackedInfo;
+
+    UUID synackTimer = addTimer(std::any(socket), socket->timeoutInterval);
+    Time sentTime = getCurrentTime();
+
+    u_info->packet = clonePacket;
+    u_info->timerUUID = synackTimer;
+    u_info->sentTime = sentTime;
+
+    socket->unAckedPackets.emplace_back(u_info);
 
     /* Socket data update*/
     socket->socketState = SocketState::SYN_RCVD;
@@ -331,11 +363,16 @@ void TCPAssignment::handleSYNSent(Packet *packet, Socket *socket) {
       // printf("handleSYNSent(): wrong ack num\n");
       return;
     }
-    // syn TIMER 종료
-    // checksum 확인
-    // unAcketPacket의 맨 앞에꺼 뽑아와서 정보 획득
+
+    unackedInfo *u_info = socket->unAckedPackets.front();
     // cancelTimer()
-    // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트`
+    cancelTimer(u_info->timerUUID);
+    // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
+    socket->sampleRTT = getCurrentTime() - u_info->sentTime;
+    getRTT(socket);
+
+    // unAckedPackets 에서 삭제
+    socket->unAckedPackets.erase(socket->unAckedPackets.begin());
 
     /* ACK 패킷 생성 */
     packetInfo *ackInfo = new packetInfo;
@@ -424,12 +461,19 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, Socket *socket) {
 
   /* ACK 패킷인 경우 */
   if (ACK & info->flag) {
-
-    // synack TIMER 종료
-    // checksum 확인
     // unAckedPacket의 맨 앞에꺼 뽑아와서 정보 획득
+    unackedInfo *u_info = new unackedInfo;
+    u_info = socket->unAckedPackets.front();
+
     // cancelTimer()
+    cancelTimer(u_info->timerUUID);
     // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
+    Time sampleRTT = getCurrentTime() - u_info->sentTime;
+    socket->sampleRTT = sampleRTT;
+    getRTT(socket);
+
+    // unAckedPackets 에서 삭제
+    socket->unAckedPackets.erase(socket->unAckedPackets.begin());
 
     /* 만약 block된 accept 프로세스가 있다면 여기서 처리 */
     if (!blockHandler.empty()) {
@@ -617,13 +661,18 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
       return;
     }
     /* 받은 ack넘버가 예상값과 일치하는 경우 */
-    uint32_t expAck = std::get<0>(socket->unAckedPackets[0]);
-    size_t dataSize = std::get<1>(socket->unAckedPackets[0]);
-    // Packet sentPacket = std::get<2>(socket->unAckedPackets[0]);
+    unackedInfo *u_info = socket->unAckedPackets.front();
+
+    uint32_t expAck = u_info->expectedAck;
+    size_t dataSize = u_info->dataSize;
+
     if (info->ackNum == expAck) {
       socket->sendNext -= dataSize;
       socket->windowSize = info->windowSize;
       socket->unAckedPackets.erase(socket->unAckedPackets.begin());
+
+      delete u_info;
+      u_info = nullptr;
     } else {
       return;
     }
@@ -718,6 +767,8 @@ void TCPAssignment::sendData(Socket *socket) {
                             dataSize);
       writeCheckSum(dataPacket);
 
+      Packet *clonePacket = new Packet(dataPacket->clone());
+
       this->sendPacket("IPv4", std::move(*dataPacket));
 
       socket->sentSize = dataSize;
@@ -726,9 +777,16 @@ void TCPAssignment::sendData(Socket *socket) {
       socket->sentAck = dataInfo->ackNum;
       socket->sendBuffer.erase(socket->sendBuffer.begin());
 
-      uint32_t expectedAck = socket->sentSeq + dataSize;
-      Packet sentPacket = dataPacket->clone();
-      socket->unAckedPackets.emplace_back(expectedAck, dataSize, sentPacket);
+      unackedInfo *u_info = new unackedInfo;
+
+      u_info->expectedAck = socket->sentSeq + dataSize;
+      u_info->dataSize = dataSize;
+
+      u_info->packet = clonePacket;
+      u_info->timerUUID = addTimer(socket, socket->timeoutInterval);
+      u_info->sentTime = getCurrentTime();
+
+      socket->unAckedPackets.emplace_back(u_info);
 
       delete dataInfo;
       dataInfo = nullptr;
@@ -754,11 +812,49 @@ void TCPAssignment::deleteSocket(Socket *socket) {
 }
 
 void TCPAssignment::timerCallback(std::any payload) {
-  // Remove below
-  /* unAckedPackets
-  | socket
-  |
-  */
+  Socket *mySocket = nullptr;
+
+  if (payload.has_value()) {
+    mySocket = std::any_cast<Socket *>(payload);
+  } else {
+    std::cout << "timer call back : impossible";
+    return;
+  }
+
+  for (auto info : mySocket->unAckedPackets) {
+
+    UUID newTimer = addTimer(mySocket, mySocket->timeoutInterval);
+    Time sentTime = getCurrentTime();
+
+    info->timerUUID = newTimer;
+    info->sentTime = sentTime;
+
+    Packet *clonePacket = new Packet(info->packet->clone());
+
+    this->sendPacket("IPv4", std::move(*info->packet));
+
+    info->packet = clonePacket;
+  }
+}
+
+void TCPAssignment::getRTT(Socket *socket) {
+  Time estimatedRTT =
+      (1 - ALPHA) * (socket->estimatedRTT) + ALPHA * socket->sampleRTT;
+
+  Time devRTT;
+  if (socket->sampleRTT >= socket->estimatedRTT) {
+    devRTT = (1 - BETA) * (socket->devRTT) +
+             BETA * (socket->sampleRTT - socket->estimatedRTT);
+  } else {
+    devRTT = (1 - BETA) * (socket->devRTT) +
+             BETA * (socket->estimatedRTT - socket->sampleRTT);
+  }
+
+  Time timeoutInterval = estimatedRTT + 4 * devRTT;
+
+  socket->estimatedRTT = estimatedRTT;
+  socket->devRTT = devRTT;
+  socket->timeoutInterval = timeoutInterval;
 }
 
 void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain,
@@ -1065,12 +1161,20 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int fd,
   writePacket(synPacket, synInfo);
   writeCheckSum(synPacket);
 
+  Packet *clonePacket = new Packet(synPacket->clone());
   this->sendPacket("IPv4", std::move(*synPacket));
 
   // syn TIMER 생성
-  // 타이머 새로 생성 : UUID synTimer = addTimer(payload, RTT)
-  // 보낸 시점 기록 : getCurrentTime()
-  // (타이머 UUID, 보낸 시점, expected Ack, datasize, clone 된 패킷)
+  unackedInfo *u_info = new unackedInfo;
+
+  UUID synTimer = addTimer(std::any(mySocket), mySocket->timeoutInterval);
+  Time sentTime = getCurrentTime();
+
+  u_info->packet = clonePacket;
+  u_info->timerUUID = synTimer;
+  u_info->sentTime = sentTime;
+
+  mySocket->unAckedPackets.emplace_back(u_info);
 
   /* implicit binding */
   if (!mySocket->bound) {

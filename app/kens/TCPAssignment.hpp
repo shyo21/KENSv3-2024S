@@ -18,6 +18,9 @@
 
 // Additional Header
 #include <algorithm>
+#include <any>
+#include <chrono>
+#include <cmath>
 #include <iostream>
 #include <queue>
 #include <random>
@@ -26,6 +29,16 @@
 #include <unordered_map>
 
 namespace E {
+
+struct unackedInfo {
+  Packet *packet;
+
+  uint32_t expectedAck = 0;
+  size_t dataSize = 0;
+
+  UUID timerUUID;
+  Time sentTime;
+};
 
 /* Basic descripter for socket state info */
 enum class SocketState {
@@ -56,9 +69,7 @@ struct Socket {
 
   std::vector<std::tuple<bool, UUID, size_t, std::vector<char>>> sendBuffer;
   std::vector<std::vector<char>> receiveBuffer;
-
-  /*(expectedAck, dataSize, packet) 튜플 저장*/
-  std::vector<std::tuple<uint32_t, size_t, Packet>> unAckedPackets;
+  std::vector<unackedInfo *> unAckedPackets;
 
   size_t windowSize = 51200;
   size_t sentSize = 0;
@@ -67,6 +78,12 @@ struct Socket {
 
   uint32_t sentSeq;
   uint32_t sentAck;
+
+  /*Timer Value*/
+  Time sampleRTT = 0;
+  Time estimatedRTT = 100 * 1000000;
+  Time devRTT = 0;
+  Time timeoutInterval = 100 * 1000000;
 };
 
 enum class blockedState { CONNECT, ACCEPT, READ, WRITE, CLOSE };
@@ -113,6 +130,8 @@ const uint8_t ACK = 16;
 const size_t DEFAULT_HEADER_SIZE = 54;
 const size_t ETHERNET_HEADER_SIZE = 14;
 const size_t MSS = 512;
+const float ALPHA = 0.125;
+const float BETA = 0.25;
 
 class TCPAssignment : public HostModule,
                       private RoutingInfoInterface,
@@ -134,6 +153,7 @@ public:
   void readPacket(Packet *, packetInfo *);
   void writePacket(Packet *, packetInfo *);
   void writeCheckSum(Packet *);
+  bool isCheckSum(Packet *);
 
   Socket *getSocket(std::pair<uint32_t, in_port_t>,
                     std::pair<uint32_t, in_port_t>);
@@ -145,6 +165,8 @@ public:
 
   void sendData(Socket *);
   void deleteSocket(Socket *);
+
+  void getRTT(Socket *);
 
   void syscall_socket(UUID, int, int, int, int);
   void syscall_close(UUID, int, int);
