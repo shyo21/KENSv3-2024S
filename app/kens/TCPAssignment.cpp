@@ -371,8 +371,14 @@ void TCPAssignment::handleSYNSent(Packet *packet, Socket *socket) {
     socket->sampleRTT = getCurrentTime() - u_info->sentTime;
     getRTT(socket);
 
+    delete u_info->packet;
+    u_info->packet = nullptr;
+
     // unAckedPackets 에서 삭제
     socket->unAckedPackets.erase(socket->unAckedPackets.begin());
+
+    delete u_info;
+    u_info = nullptr;
 
     /* ACK 패킷 생성 */
     packetInfo *ackInfo = new packetInfo;
@@ -462,18 +468,22 @@ void TCPAssignment::handleSYNRcvd(Packet *packet, Socket *socket) {
   /* ACK 패킷인 경우 */
   if (ACK & info->flag) {
     // unAckedPacket의 맨 앞에꺼 뽑아와서 정보 획득
-    unackedInfo *u_info = new unackedInfo;
-    u_info = socket->unAckedPackets.front();
+    unackedInfo *u_info = socket->unAckedPackets.front();
 
     // cancelTimer()
     cancelTimer(u_info->timerUUID);
     // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
-    Time sampleRTT = getCurrentTime() - u_info->sentTime;
-    socket->sampleRTT = sampleRTT;
+    socket->sampleRTT = getCurrentTime() - u_info->sentTime;
     getRTT(socket);
+
+    delete u_info->packet;
+    u_info->packet = nullptr;
 
     // unAckedPackets 에서 삭제
     socket->unAckedPackets.erase(socket->unAckedPackets.begin());
+
+    delete u_info;
+    u_info = nullptr;
 
     /* 만약 block된 accept 프로세스가 있다면 여기서 처리 */
     if (!blockHandler.empty()) {
@@ -669,10 +679,20 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
     if (info->ackNum == expAck) {
       socket->sendNext -= dataSize;
       socket->windowSize = info->windowSize;
+
+      cancelTimer(u_info->timerUUID);
+      // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
+      socket->sampleRTT = getCurrentTime() - u_info->sentTime;
+      getRTT(socket);
+
+      delete u_info->packet;
+      u_info->packet = nullptr;
+
       socket->unAckedPackets.erase(socket->unAckedPackets.begin());
 
       delete u_info;
       u_info = nullptr;
+
     } else {
       return;
     }

@@ -31,7 +31,7 @@
 namespace E {
 
 struct unackedInfo {
-  Packet *packet;
+  Packet *packet = nullptr;
 
   uint32_t expectedAck = 0;
   size_t dataSize = 0;
