@@ -580,8 +580,33 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
 
   /* 받은 패킷에 데이터 payload가 들어있는 경우 */
   if (payloadLength > 0) {
-    /* TODO: 내가 기대하던 seqnum이 아닌경우 fast retransmit */
 
+    /* 내가 기대하던 seqnum이 아닌경우 fast retransmit */
+    if (socket->sentAck != info->seqNum) {
+      /* 개같이 받은 패킷에 대한 ACK 발송 */
+      packetInfo *ackInfo = new packetInfo;
+      Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
+      ackInfo->srcIP = info->destIP;
+      ackInfo->destIP = info->srcIP;
+
+      ackInfo->srcPort = info->destPort;
+      ackInfo->destPort = info->srcPort;
+      ackInfo->seqNum = socket->sentSeq;
+      ackInfo->ackNum = socket->sentAck;
+
+      ackInfo->flag = ACK;
+      ackInfo->windowSize = info->windowSize;
+
+      writePacket(ackPacket, ackInfo);
+      writeCheckSum(ackPacket);
+
+      this->sendPacket("IPv4", std::move(*ackPacket));
+
+      delete ackInfo;
+      ackInfo = nullptr;
+      return;
+    };
     /* TODO: 내가 이미 받은 패킷인 경우 fast retransmit */
 
     /* 새로운 패킷인 경우 데이터를 내 버퍼로 복사 */
@@ -670,30 +695,57 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
       // TODO: ack이 왔는데 unackedpacket이 비어있다면???
       return;
     }
+
+    uint32_t expAck = socket->unAckedPackets.front()->expectedAck;
+    Time currTime = getCurrentTime();
+
     /* 받은 ack넘버가 예상값과 일치하는 경우 */
-    unackedInfo *u_info = socket->unAckedPackets.front();
+    if (info->ackNum >= expAck) {
 
-    uint32_t expAck = u_info->expectedAck;
-    size_t dataSize = u_info->dataSize;
+      for (auto unackIter = socket->unAckedPackets.begin();
+           unackIter != socket->unAckedPackets.end();) {
 
-    if (info->ackNum == expAck) {
-      socket->sendNext -= dataSize;
-      socket->windowSize = info->windowSize;
+        unackedInfo *unackInfo = *unackIter;
 
-      cancelTimer(u_info->timerUUID);
-      // RTT 확인(현재 시점 - 보낸 시점) 및 업데이트
-      socket->sampleRTT = getCurrentTime() - u_info->sentTime;
-      getRTT(socket);
+        if (info->ackNum > unackInfo->expectedAck) {
 
-      delete u_info->packet;
-      u_info->packet = nullptr;
+          socket->sendNext -= unackInfo->dataSize;
 
-      socket->unAckedPackets.erase(socket->unAckedPackets.begin());
+          cancelTimer(unackInfo->timerUUID);
 
-      delete u_info;
-      u_info = nullptr;
+          delete unackInfo->packet;
+          unackInfo->packet = nullptr;
 
-    } else {
+          unackIter = socket->unAckedPackets.erase(unackIter);
+          delete unackInfo;
+        }
+
+        else if (info->ackNum == unackInfo->expectedAck) {
+
+          socket->sendNext -= unackInfo->dataSize;
+
+          cancelTimer(unackInfo->timerUUID);
+          socket->sampleRTT = currTime - unackInfo->sentTime;
+          getRTT(socket);
+
+          delete unackInfo->packet;
+          unackInfo->packet = nullptr;
+
+          socket->unAckedPackets.erase(unackIter);
+          delete unackInfo;
+
+          break;
+        }
+
+        else {
+          break;
+        }
+      }
+    }
+
+    else {
+      /* expectedAck > info->ackNum */
+
       return;
     }
 
@@ -837,11 +889,11 @@ void TCPAssignment::timerCallback(std::any payload) {
   if (payload.has_value()) {
     mySocket = std::any_cast<Socket *>(payload);
   } else {
-    std::cout << "timer call back : impossible";
     return;
   }
 
   for (auto info : mySocket->unAckedPackets) {
+    cancelTimer(info->timerUUID);
 
     UUID newTimer = addTimer(mySocket, mySocket->timeoutInterval);
     Time sentTime = getCurrentTime();
