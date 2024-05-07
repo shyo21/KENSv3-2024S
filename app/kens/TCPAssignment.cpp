@@ -400,6 +400,13 @@ void TCPAssignment::handleSYNSent(Packet *packet, Socket *socket) {
     /* ACK 패킷 송신 */
     this->sendPacket("IPv4", std::move(*ackPacket));
 
+    unackedInfo *n_info = new unackedInfo;
+
+    n_info->islastACK = true;
+    n_info->timerUUID = addTimer(socket, 2 * socket->timeoutInterval);
+
+    socket->unAckedPackets.emplace_back(n_info);
+
     /* 소켓 정보 설정 */
     socket->connectedAddr = (sockaddr_in *)malloc(sizeof(sockaddr_in));
     memset(socket->connectedAddr, 0, sizeof(sockaddr_in));
@@ -412,25 +419,25 @@ void TCPAssignment::handleSYNSent(Packet *packet, Socket *socket) {
     socket->sentAck = ackInfo->ackNum;
 
     /* 처리한게 connect에서 block된 프로세스인지 확인 */
-    if (!blockHandler.empty()) {
+    // if (!blockHandler.empty()) {
 
-      for (const auto &setIter : blockHandler) {
+    //   for (const auto &setIter : blockHandler) {
 
-        Socket *mySocket = setIter->socket;
-        UUID syscallUUID = setIter->uuid;
+    //     Socket *mySocket = setIter->socket;
+    //     UUID syscallUUID = setIter->uuid;
 
-        if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd) &&
-            setIter->type == blockedState::CONNECT) {
+    //     if ((mySocket->pid == socket->pid) && (mySocket->fd == socket->fd) &&
+    //         setIter->type == blockedState::CONNECT) {
 
-          this->returnSystemCall(syscallUUID, 0);
+    //       this->returnSystemCall(syscallUUID, 0);
 
-          blockHandler.erase(setIter);
-          delete setIter;
+    //       blockHandler.erase(setIter);
+    //       delete setIter;
 
-          break;
-        }
-      }
-    }
+    //       break;
+    //     }
+    //   }
+    // }
 
     delete ackInfo;
     ackInfo = nullptr;
@@ -577,6 +584,39 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
 
   // synack packet을 받았을 때 처리
   /* ACK 패킷을 다시 전송*/
+  if ((SYN & info->flag) && (ACK & info->flag)) {
+
+    if (!socket->unAckedPackets.empty()) {
+      if (socket->unAckedPackets.front()->islastACK) {
+
+        cancelTimer(socket->unAckedPackets.front()->timerUUID);
+        socket->unAckedPackets.front()->timerUUID =
+            addTimer(socket, 2 * socket->timeoutInterval);
+      }
+    }
+
+    /* ACK 패킷 생성 */
+    packetInfo *ackInfo = new packetInfo;
+    Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
+    ackInfo->srcIP = info->destIP;
+    ackInfo->destIP = info->srcIP;
+
+    ackInfo->srcPort = info->destPort;
+    ackInfo->destPort = info->srcPort;
+
+    ackInfo->seqNum = info->ackNum;
+    ackInfo->ackNum = info->seqNum + 1;
+    ackInfo->flag = ACK;
+
+    writePacket(ackPacket, ackInfo);
+    writeCheckSum(ackPacket);
+
+    /* ACK 패킷 송신 */
+    this->sendPacket("IPv4", std::move(*ackPacket));
+
+    return;
+  }
 
   /* 받은 패킷에 데이터 payload가 들어있는 경우 */
   if (payloadLength > 0) {
@@ -690,9 +730,13 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
   }
 
   /* 빈 ACK 패킷인 경우 */
-  else if (ACK & info->flag) {
+  else if (!(SYN & info->flag) && ACK & info->flag && !(FIN & info->flag)) {
+
+    socket->windowSize = info->windowSize;
+
     if (socket->unAckedPackets.empty()) {
       // TODO: ack이 왔는데 unackedpacket이 비어있다면???
+      sendData(socket);
       return;
     }
 
@@ -745,6 +789,16 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
 
     else {
       /* expectedAck > info->ackNum */
+      // 타이머 리셋
+      for (auto info : socket->unAckedPackets) {
+        cancelTimer(info->timerUUID);
+
+        UUID newTimer = addTimer(socket, socket->timeoutInterval);
+        Time sentTime = getCurrentTime();
+
+        info->timerUUID = newTimer;
+        info->sentTime = sentTime;
+      }
 
       return;
     }
@@ -755,26 +809,45 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
     }
 
     else {
-      if (!blockHandler.empty()) {
-        for (const auto &setIter : blockHandler) {
-          Socket *mySocket = setIter->socket;
-          UUID syscallUUID = setIter->uuid;
-          int pid = socket->pid;
-          int fd = socket->fd;
+      if (!(socket->unAckedPackets.empty())) {
+        if (!blockHandler.empty()) {
+          for (const auto &setIter : blockHandler) {
+            Socket *mySocket = setIter->socket;
+            UUID syscallUUID = setIter->uuid;
+            int pid = socket->pid;
+            int fd = socket->fd;
 
-          if ((mySocket->pid == pid) && (mySocket->fd == fd) &&
-              setIter->type == blockedState::CLOSE) {
+            if ((mySocket->pid == pid) && (mySocket->fd == fd) &&
+                setIter->type == blockedState::CLOSE) {
 
-            // socketSet.erase(mySocket);
-            // deleteSocket(mySocket);
-            // this->removeFileDescriptor(pid, fd);
+              packetInfo *finInfo = new packetInfo;
+              Packet *finPacket = new Packet(DEFAULT_HEADER_SIZE);
 
-            this->returnSystemCall(syscallUUID, 0);
+              finInfo->srcIP = info->destIP;
+              finInfo->destIP = info->srcIP;
 
-            blockHandler.erase(setIter);
-            delete setIter;
+              finInfo->srcPort = info->destPort;
+              finInfo->destPort = info->srcPort;
+              finInfo->seqNum = info->ackNum;
+              finInfo->ackNum = info->seqNum;
+              finInfo->flag = FIN | ACK;
+              finInfo->windowSize = info->windowSize;
 
-            break;
+              writePacket(finPacket, finInfo);
+              writeCheckSum(finPacket);
+
+              this->sendPacket("IPv4", std::move(*finPacket));
+
+              delete finInfo;
+              finInfo = nullptr;
+
+              this->returnSystemCall(syscallUUID, 0);
+
+              blockHandler.erase(setIter);
+              delete setIter;
+
+              break;
+            }
           }
         }
       }
@@ -782,29 +855,85 @@ void TCPAssignment::handleEstab(Packet *packet, Socket *socket) {
   }
 
   /* FIN ACK 패킷인 경우 */
-  else if (FIN & info->flag && ACK & info->flag) {
-    // printf("estab handle");
-    /* 정상적으로 복사완료한 패킷에 대한 ACK 발송 */
-    packetInfo *ackInfo = new packetInfo;
-    Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+  else if ((FIN & info->flag) && (ACK & info->flag)) {
 
-    ackInfo->srcIP = info->destIP;
-    ackInfo->destIP = info->srcIP;
+    /* 핸드쉐이크 마지막 ack이 잘 간 경우 */
+    if (!socket->unAckedPackets.empty()) {
+      if (socket->unAckedPackets.front()->islastACK) {
 
-    ackInfo->srcPort = info->destPort;
-    ackInfo->destPort = info->srcPort;
-    ackInfo->seqNum = info->ackNum;
-    ackInfo->ackNum = info->seqNum;
-    ackInfo->flag = ACK;
-    ackInfo->windowSize = info->windowSize;
+        unackedInfo *u_info = socket->unAckedPackets.front();
+        cancelTimer(u_info->timerUUID);
 
-    writePacket(ackPacket, ackInfo);
-    writeCheckSum(ackPacket);
+        socket->unAckedPackets.erase(socket->unAckedPackets.begin());
 
-    this->sendPacket("IPv4", std::move(*ackPacket));
+        delete u_info;
+        u_info = nullptr;
 
-    delete ackInfo;
-    ackInfo = nullptr;
+        if (!blockHandler.empty()) {
+
+          for (const auto &setIter : blockHandler) {
+
+            Socket *iterSocket = setIter->socket;
+            UUID syscallUUID = setIter->uuid;
+
+            if ((socket->pid == iterSocket->pid) &&
+                (socket->fd == iterSocket->fd) &&
+                setIter->type == blockedState::CONNECT) {
+
+              this->returnSystemCall(syscallUUID, 0);
+
+              blockHandler.erase(setIter);
+              delete setIter;
+
+              break;
+            }
+          }
+
+          for (const auto &setIter : blockHandler) {
+
+            Socket *iterSocket = setIter->socket;
+            UUID syscallUUID = setIter->uuid;
+
+            if ((socket->pid == iterSocket->pid) &&
+                (socket->fd == iterSocket->fd) &&
+                setIter->type == blockedState::CLOSE) {
+
+              this->returnSystemCall(syscallUUID, 0);
+
+              blockHandler.erase(setIter);
+              delete setIter;
+
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (info->seqNum == socket->sentAck) {
+
+      /* FINACK 패킷에 대한 ACK 발송 */
+      packetInfo *ackInfo = new packetInfo;
+      Packet *ackPacket = new Packet(DEFAULT_HEADER_SIZE);
+
+      ackInfo->srcIP = info->destIP;
+      ackInfo->destIP = info->srcIP;
+
+      ackInfo->srcPort = info->destPort;
+      ackInfo->destPort = info->srcPort;
+      ackInfo->seqNum = info->ackNum;
+      ackInfo->ackNum = info->seqNum;
+      ackInfo->flag = ACK;
+      ackInfo->windowSize = info->windowSize;
+
+      writePacket(ackPacket, ackInfo);
+      writeCheckSum(ackPacket);
+
+      this->sendPacket("IPv4", std::move(*ackPacket));
+
+      delete ackInfo;
+      ackInfo = nullptr;
+    }
   }
 
   delete info;
@@ -892,7 +1021,43 @@ void TCPAssignment::timerCallback(std::any payload) {
     return;
   }
 
+  /* 핸드쉐이크 마지막 ack이 잘 간 경우 */
+  if (mySocket->unAckedPackets.front()->islastACK) {
+
+    unackedInfo *u_info = mySocket->unAckedPackets.front();
+    cancelTimer(u_info->timerUUID);
+
+    mySocket->unAckedPackets.erase(mySocket->unAckedPackets.begin());
+
+    delete u_info;
+    u_info = nullptr;
+
+    if (!blockHandler.empty()) {
+
+      for (const auto &setIter : blockHandler) {
+
+        Socket *iterSocket = setIter->socket;
+        UUID syscallUUID = setIter->uuid;
+
+        if ((mySocket->pid == iterSocket->pid) &&
+            (mySocket->fd == iterSocket->fd) &&
+            setIter->type == blockedState::CONNECT) {
+
+          this->returnSystemCall(syscallUUID, 0);
+
+          blockHandler.erase(setIter);
+          // delete setIter;
+
+          break;
+        }
+      }
+    }
+
+    return;
+  }
+
   for (auto info : mySocket->unAckedPackets) {
+
     cancelTimer(info->timerUUID);
 
     UUID newTimer = addTimer(mySocket, mySocket->timeoutInterval);

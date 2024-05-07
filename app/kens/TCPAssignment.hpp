@@ -33,6 +33,8 @@ namespace E {
 struct unackedInfo {
   Packet *packet = nullptr;
 
+  bool islastACK = false;
+
   uint32_t expectedAck = 0;
   size_t dataSize = 0;
 
