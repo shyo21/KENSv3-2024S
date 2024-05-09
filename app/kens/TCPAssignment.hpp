@@ -33,7 +33,7 @@ namespace E {
 struct unackedInfo {
   Packet *packet = nullptr;
 
-  bool islastACK = false;
+  bool isSim = false;
 
   uint32_t expectedAck = 0;
   size_t dataSize = 0;
@@ -49,7 +49,13 @@ enum class SocketState {
   LISTENING,
   SYN_SENT,
   SYN_RCVD,
-  ESTABLISHED
+  ESTABLISHED,
+  FIN_WAIT_1,
+  FIN_WAIT_2,
+  CLOSING,
+  TIME_WAIT,
+  CLOSE_WAIT,
+  LAST_ACK
 };
 
 /*Basic socket information*/
@@ -164,6 +170,12 @@ public:
   void handleListening(Packet *, Socket *);
   void handleSYNRcvd(Packet *, Socket *);
   void handleEstab(Packet *, Socket *);
+  void handleFin1(Packet *, Socket *);
+  void handleFin2(Packet *, Socket *);
+  void handleClosing(Packet *, Socket *);
+  void handleTimeWait(Packet *, Socket *);
+  void handleCloseWait(Packet *, Socket *);
+  void handleLastACK(Packet *, Socket *);
 
   void sendData(Socket *);
   void deleteSocket(Socket *);

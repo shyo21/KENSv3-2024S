@@ -1,66 +1,56 @@
-[[[[[ README for KENSv3 Programming Assignment #2 ]]]]]
+[[[[[ README for KENSv3 Programming Assignment #3 ]]]]]
 
-<<< 1. progress report >>>
+<<< 1.TCPAssignment.hpp >>>
 
-2024/04/24 WED
+1-a. unackedInfo 구조체
+    답변을 반드시 반아야 하는 패킷들을 발송한 뒤 그에 관한 정보들을 보관하는 구조체이다.
 
-- 프로젝트 시작
-- 주요 성과: syscall_read(), syscall_write(), handleEstab(), sendData() 로직 구현
+1-2. enum class SocketState
+    소켓의 상태를 정의한다. close를 위해 상태를 추가했다.
 
-- socket 구조체에 std::vector<char> sendBuffer, receiveBuffer 추가
-    > 보내고자 하는 모든 데이터는 sendBuffer에, 패킷에서 읽은 모든 데이터는 receiveBuffer에 저장
-    > std::vector의 특성상 시스템 메모리의 한계까지 크기 증가 가능
-    > 버퍼 사이즈 부족으로 인한 block은 일단 고려하지 않음
+1-3. socket 구조체
+    함수 전체에서 유지되어야 하는 소켓의 여러 세부 정보를 보관하는 구조체이다.
 
-- syscall_read()
-    > receiveBuffer가 비어있다면 block
-    > 데이터가 들어있으면 모든 데이터를 buf로 옮김
-    > buf보다 데이터의 크기가 크다면 일단 buf의 크기만큼 옮김
-    > 그럼 나머지 데이터는??
-    > 읽은 데이터의 크기 리턴하고 종료
+1-4. enum class blockedState
+    특정 프로세스를 블록할 때 이 프로세스가 어떤 시스템 콜에서 블록되었는지 표지하기 위한 상태이다.
 
-- syscall_write()
-    > buf에 있는 데이터를 전부 sendBuffer로 복사
-    > sendBuffer에 옮겨진 데이터를 전부 패킷으로 만들어 발송 (sendData 함수 호출)
-    > 보낸 데이터의 크기인 count를 리턴하고 종료
+1-5. blockedProcess 구조체
+    블록해야 하는 프로세스를 블록한 뒤 기억해야 하는 정보들을 보관하는 구조체이다.
 
-- handleEstab()
-    > 받은 패킷에 헤더를 제외한 payload가 존재하는지 확인
-    > 있다면 데이터를 전부 recieveBuffer로 복사
-    > TODO: read()에서 blocked process인지 확인하고 해결하는 로직 구현
-    > 정상적으로 복사했다면 이 패킷에 대한 ack 패킷 발송
-    > TODO: 패킷 헤더 나머지부분 작성하는거 빼먹음
-    > TODO: 받은 패킷이 ack인 경우 핸들링 로직 구현
+1-6. packetInfo 구조체
+    패킷 헤더에 존재하는 정보들을 구역별로 나누어 보관하는 구조체이다.
 
-- sendData()
-    > 데이터 송신이 가능한 상태인지 윈도우 확인
-    > 송신이 가능하다면 보낼 데이터를 담은 패킷을 생성해서 송신
-    > 데이터가 패킷 하나의 MSS보다 크다면 여러개의 패킷으로 쪼개서 송신
-    > 송신 후 윈도우 상태 업데이트
-    > TODO: 패킷 헤더 나머지부분 작성하는거 여기도 빼먹음
-
-- 결과 : 패킷 헤더 작성하는거 까먹어서 작동이 안됨 ㅜㅜ
+PA2와의 주요 변경점은 unackedInfo와 blockedProcess 구조체를 추가한 점이다.
+데이터 전송을 구현하는 과정에서 기존의 unackedPackets 벡터와 blockedProcess 벡터에 저장해야 할 정보의 가짓수가 많아지게 되었다.
+이를 모두 벡터 안의 튜플 형식으로 저장하다 보니 접근이 비직관적이며 코드가 길고 난잡해져 따로 구조체를 만들어 관리하게 변경하였다.
 
 
-2024/04/25 THU
+<<< 2.TCPAssignment.cpp >>>
 
-- 주요 성과: packetInfo 구조체 생성, readData(), writeData(), writePacket() 함수 작성
-            handleEstab(), sendData() 수정
+2-a. readPacket
+    패킷헤터의 모든 정보를 읽어와 packetInfo 구조체에 호스트 바이트 오더로 복사하는 함수이다.
 
-- packetInfo 구조체
-    > 패킷 헤더에 담긴 정보를 전부 저장하는 구조체
-    > sendData 함수에서 헤더부분 작성을 위해서 정보를 전달해야 할 필요성에 의해 생성
-    > 만들고 보니 이거 쓰면 패킷 read write할 때 중복해서 사용하던 긴 코드들 삭제할 수 있을듯?
+2-b. writePacket
+    packetInfo 구조체에 있는 모든 정보를 패킷 헤더의 올바른 구역에 적어넣는 함수이다.
 
-- readData()
-    > 패킷과 packetInfo 구조체를 입력받아 패킷에 있는 모든 헤더 정보를 구조체에 복사
-    > host order로 변환해서 저장함
-    > ip 헤더와 tcp 헤더의 정보 전부 들고있음
+2-c. writeCheckSum
+    패킷의 체크섬을 게산해 적어넣는 함수이다.
 
-- writeData()
-    > 주어진 packetInfo 구조체에 있는 정보를 패킷에 전부 적어넣음
-    > network order로 변환해서 적음
+2-d. isCheckSum
+    패킷의 체크섬이 올바른 값인지 확인하는 함수이다.
 
-- handleEstab()
-    > blocked process 처리하는 로직 추가
-    > 
+이상 4개의 함수는 PA2에서 쪼개져서 존재하던 패킷을 읽고 쓰는 함수들을 깔끔하게 통합한 버전이다.
+
+2-e. getSocket
+
+2-f. packetArrived
+    패킷이 도착하면 체크섬을 확인하는 로직을 추가했다.
+    또한 늘어난 소켓 스테이트에 대응하는 패턴 매칭을 추가했다.
+
+2-g. 이하 모든 함수들은 패킷이 도착했을 때 각각의 state별로 어떤 일을 해야 하는지 정의한 함수들이다.
+    기본적으로 PA2 document에 있는 state diagram을 기반으로 작성하였다.
+    이에 추가로 랜덤 시드로 test case를 돌리는 과정에서 발견한 수많은 예외사항에 대한 처리도 최대한 추가했다.
+
+    특히 unreliable 환경에서는 각 state마다 예상되는 플래그의 패킷만 도달하는 것이 아니라 더 까다로웠다.
+    state에 알맞지 않은 패킷이 도달할 때 현재 진행중인 timer를 어떻게 재설정할지, 어떤 패킷을 재전송할지,
+    처리 후 소켓의 상태는 어떻게 바꾸어야 할 지 파악하는데 오랜 시간이 걸렸다.
