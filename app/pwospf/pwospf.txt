@@ -354,6 +354,7 @@ LSU Packet Format
      Hop limited value decremented each time the packet is forwarded.  The
      TTL value is only considered during packet forwarding and not during
      packet reception.
+
   # of advertisements
      Total number of link state advertisements contained in the packet
 
@@ -412,7 +413,7 @@ LSU Packet Format
       Mask   0.0.0.0
       RID    0.0.0.0
 
-   3. (link shared with B
+   3. (link shared with B)
       Subnet 192.168.128.4
       Mask   255.255.255.254
       RID    192.168.128.5  (B's router ID)

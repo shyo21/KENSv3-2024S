@@ -12,6 +12,14 @@
 #include <E/Networking/E_TimerModule.hpp>
 #include <E/Networking/E_Wire.hpp>
 
+// Additional Header
+#include <algorithm>
+#include <any>
+#include <arpa/inet.h>
+#include <chrono>
+#include <cmath>
+#include <iostream>
+
 namespace E {
 
 constexpr Size MaxCost = 20;
@@ -34,7 +42,32 @@ constexpr ipv4_t SubnetMask = {255, 255, 255, 0};
 // 16 bit helloint    - interval in seconds between HELLO broadcasts
 constexpr uint16_t HelloInt = 60;
 
-/* Router Configuration End*/
+/* Router Configuration End */
+
+/* frequently used constants */
+constexpr int ETH_HEAD_SIZE = 14;
+constexpr int IP_HEAD_SIZE = 20;
+constexpr int OSPF_HEAD_SIZE = 24;
+
+/* if ntohll and htonll not defined */
+#ifndef HAVE_NTOHLL
+#ifdef HAVE_BE64TOH
+#include <endian.h>
+#define ntohll(x) be64toh(x)
+#define htonll(x) htobe64(x)
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define ntohll(x) (x)
+#define htonll(x) (x)
+#else
+#define ntohll(x) ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32)
+#define htonll(x) ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32)
+#endif
+#else
+#define ntohll(x) ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32)
+#define htonll(x) ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32)
+#endif
+#endif
 
 #ifdef HAVE_PRAGMA_PACK
 #pragma pack(push, 1)
@@ -59,7 +92,8 @@ __attribute__((packed));
 #endif
 
 struct pwospf_hello_t {
-  struct pwospf_header_t header;
+  pwospf_header_t *header_ptr;
+  pwospf_header_t header;
   uint32_t network_mask;
   uint16_t hello_int;
   uint16_t padding;
@@ -83,11 +117,12 @@ __attribute__((packed));
 #endif
 
 struct pwospf_lsu_t {
-  struct pwospf_header_t header;
+  pwospf_header_t *header_ptr;
+  pwospf_header_t header;
   uint16_t sequence;
   uint16_t ttl;
   uint32_t num_advertisements;
-  struct pwospf_lsu_entry_t entries[];
+  pwospf_lsu_entry_t entries[];
 }
 #if defined(HAVE_ATTR_PACK)
 __attribute__((packed));
@@ -126,6 +161,14 @@ public:
   virtual void initialize();
   virtual void finalize();
   virtual ~PWOSPFAssignment();
+
+  /* implemented functions */
+  pwospf_header_t *readOSPFHeader(Packet *);
+  pwospf_hello_t *readHello(Packet *);
+  pwospf_lsu_t *readLSU(Packet *);
+
+  void handleHello(Packet *);
+  void handleLSU(Packet *);
 
 protected:
   virtual std::any diagnose(std::any param) final {
