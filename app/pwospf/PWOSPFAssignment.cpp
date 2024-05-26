@@ -41,13 +41,13 @@ void PWOSPFAssignment::initialize() {
 
     uint32_t myIP = ntohl(NetworkUtil::arrayToUINT64(getIPAddr(index).value()));
 
-    interface_map[my_router->routerID].emplace(myIP);
-
     // my_router interface_t 추가
     interface_t *myinterface = new interface_t;
     myinterface->ipAddr = myIP;
     myinterface->index = index;
     my_router->my_interface.emplace(myinterface);
+
+    interface_map[my_router->routerID][myIP] = myinterface->mask;
 
     // ospf 헤더 정보
     pwospf_header_t *helloHead = new pwospf_header_t;
@@ -115,54 +115,48 @@ Size PWOSPFAssignment::pwospfQuery(const ipv4_t &ipv4) {
 
   uint32_t inputIP = ntohl(NetworkUtil::arrayToUINT64(ipv4));
 
-  /* ip가 특정 라우터의 인터페이스인 경우 해당 라우터까지의 cost 즉시 출력 */
-  for (const auto &mapIter : interface_map) {
-    for (const auto &setIter : mapIter.second) {
-      if (setIter == inputIP)
-        return cost_map[mapIter.first];
-    }
-  }
+  /* 목적지 ip가 속한 서브넷 탐색 - longest prefix match
+   * 해당 서브넷에 연결된 라우터들 모두 식별
+   * 식별된 라우터 중 가장 cost가 낮은 라우터 선택 */
 
-  /* 아닌 경우 해당 ip가 속한 서브넷 탐색 - longest prefix match */
-  uint32_t longestSubnet = 0;
+  std::set<uint32_t> router_candidates;
   int longestMatch = -1;
 
-  for (const auto &iter : routerSubnet) {
-    uint32_t currSubnet = iter.first;
+  // longest prefix match
+  for (const auto &outerIter : interface_map) {
+    for (const auto &innerIter : outerIter.second) {
+      uint32_t currSubnet = innerIter.first;
 
-    int match = 0;
-    uint32_t mask = 0x80000000;
+      int match = 0;
+      uint32_t mask = 0x80000000;
 
-    for (int i = 0; i < 32; i++) {
-      if ((inputIP & mask) == (currSubnet & mask))
-        match++;
-      else
-        break;
-      mask >>= 1;
+      for (int i = 0; i < 32; i++) {
+        if ((inputIP & mask) == (currSubnet & mask))
+          match++;
+        else
+          break;
+        mask >>= 1;
+      }
+
+      if (match > longestMatch) {
+        router_candidates.clear();
+        router_candidates.emplace(outerIter.first);
+        longestMatch = match;
+      }
+
+      else if (match == longestMatch)
+        router_candidates.emplace(outerIter.first);
     }
-
-    if (match > longestMatch) {
-      longestSubnet = currSubnet;
-      longestMatch = match;
-    }
   }
 
-  std::pair<uint32_t, uint32_t> routers = routerSubnet[longestSubnet];
-
-  int cost1 = cost_map[routers.first];
-  int cost2 = cost_map[routers.second];
-
-  if (cost1 >= cost2) {
-    if (cost2 == 0)
-      return cost1;
-    return cost2;
+  // check costs
+  std::set<int> cost_candidates;
+  for (const auto &iter : router_candidates) {
+    if (cost_map[iter] != 0)
+      cost_candidates.emplace(cost_map[iter]);
   }
 
-  else {
-    if (cost1 == 0)
-      return cost2;
-    return cost1;
-  }
+  return *cost_candidates.begin();
 }
 
 pwospf_header_t *PWOSPFAssignment::readOSPFHeader(Packet *packet) {
@@ -209,7 +203,6 @@ pwospf_hello_t *PWOSPFAssignment::readHello(Packet *packet) {
   pwospf_hello_t *hello_t = new pwospf_hello_t;
 
   hello_t->header_ptr = readOSPFHeader(packet);
-  // hello_t->header = *(hello_t->header_ptr);
   hello_t->network_mask = ntohl(n_network_mask);
   hello_t->hello_int = ntohs(n_hello_int);
   hello_t->padding = ntohs(n_padding);
@@ -240,7 +233,6 @@ pwospf_lsu_t *PWOSPFAssignment::readLSU(Packet *packet) {
   }
 
   lsu_t->header_ptr = readOSPFHeader(packet);
-  // lsu_t->header = *(lsu_t->header_ptr);
   lsu_t->sequence = ntohs(n_sequence);
   lsu_t->ttl = ntohs(n_ttl);
   lsu_t->num_advertisements = ntohl(n_num_advertisements);
@@ -402,7 +394,7 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
   packet->readData(ETH_HEAD_SIZE + 12, &srcIP, 4);
   srcIP = ntohl(srcIP);
 
-  interface_map[hello_t->header_ptr->router_id].emplace(srcIP);
+  interface_map[hello_t->header_ptr->router_id][srcIP] = hello_t->network_mask;
 
   bool isUpdated = false;
 
@@ -484,7 +476,6 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
     }
 
     lsu_t->header_ptr = lsuHead;
-    // lsu_t->header = *lsuHead;
     lsu_t->sequence = my_router->seqNum;
     lsu_t->ttl = TTLInitial;
     lsu_t->num_advertisements = h_num_advertisements;
@@ -509,11 +500,6 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
 
         lsu_t->entries[i] = *temp;
 
-        uint32_t srcID = my_router->routerID;
-        uint32_t destSubnet = (temp->subnet) & (temp->mask);
-
-        routerSubnet[destSubnet] = std::make_pair(srcID, 0);
-
         delete temp;
         i++;
       }
@@ -532,8 +518,6 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
           uint32_t srcID = my_router->routerID;
           uint32_t destSubnet = (temp->subnet) & (temp->mask);
           uint32_t destID = nb1;
-
-          routerSubnet[destSubnet] = std::make_pair(srcID, destID);
 
           delete temp;
           i++;
@@ -601,10 +585,9 @@ void PWOSPFAssignment::handleLSU(Packet *packet) {
       int cost = lsu_t->entries[i].cost;
 
       if (destID != 0)
-        interface_map[destID].emplace(destIP);
+        interface_map[destID][destIP] = mask;
 
       topology_map[srcID][destID] = cost;
-      routerSubnet[destIP & mask] = std::make_pair(srcID, destID);
     }
     // 다익스트라 알고리즘 실행
     dijkstra();

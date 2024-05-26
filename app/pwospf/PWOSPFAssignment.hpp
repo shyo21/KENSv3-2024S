@@ -168,20 +168,17 @@ class PWOSPFAssignment : public HostModule,
 private:
   virtual void timerCallback(std::any payload) final;
 
-  /* 라우터 ID -> 해당 라우터의 네이버 ID, cost 모음 */
+  /* 라우터 ID -> 해당 라우터의 네이버 라우터 ID, cost 모음 */
   std::map<uint32_t, std::map<uint32_t, int>> topology_map;
 
-  /* 라우터 ID -> 해당 라우터의 interface IP 모음 */
-  std::map<uint32_t, std::set<uint32_t>> interface_map;
+  /* 라우터 ID -> 해당 라우터의 interface IP, mask 모음 */
+  std::map<uint32_t, std::map<uint32_t, uint32_t>> interface_map;
 
   /* 라우터 ID -> 직전에 수신했던 시퀀스 넘버 */
   std::map<uint32_t, int> seq_map;
 
   /* 목적지 ID -> 목적지까지의 cost */
   std::map<uint32_t, int> cost_map;
-
-  // subnet&mask routerID, routerID
-  std::map<uint32_t, std::pair<uint32_t, uint32_t>> routerSubnet;
 
   router_t *my_router;
 
