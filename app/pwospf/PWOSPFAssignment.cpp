@@ -40,6 +40,9 @@ void PWOSPFAssignment::initialize() {
   while (getIPAddr(index).has_value()) {
 
     uint32_t myIP = ntohl(NetworkUtil::arrayToUINT64(getIPAddr(index).value()));
+
+    interface_map[my_router->routerID].emplace(myIP);
+
     // my_router interface_t 추가
     interface_t *myinterface = new interface_t;
     myinterface->ipAddr = myIP;
@@ -85,21 +88,21 @@ void PWOSPFAssignment::initialize() {
 
 void PWOSPFAssignment::finalize() {}
 
-void PWOSPFAssignment::print_map() {
-  for (const auto &outer_pair : topology_map) {
-    uint32_t outer_key = outer_pair.first;
-    const std::map<uint32_t, int> &inner_map = outer_pair.second;
+/* define printing operator for ipv4_t type */
+std::ostream &operator<<(std::ostream &os, const ipv4_t &ipv4) {
+  os << static_cast<int>(ipv4[0]) << '.' << static_cast<int>(ipv4[1]) << '.'
+     << static_cast<int>(ipv4[2]) << '.' << static_cast<int>(ipv4[3]);
+  return os;
+}
 
-    std::cout << "Outer Key: " << outer_key << std::endl;
-
-    for (const auto &inner_pair : inner_map) {
-      uint32_t inner_key = inner_pair.first;
-      int value = inner_pair.second;
-
-      std::cout << "  Inner Key: " << inner_key << ", Value: " << value
-                << std::endl;
-    }
-  }
+/* convert uint32_t type ip into formatted string type */
+std::string print_uint32(uint32_t ip) {
+  std::string ipv4;
+  ipv4 += std::to_string((ip >> 24) & 0xFF) + ".";
+  ipv4 += std::to_string((ip >> 16) & 0xFF) + ".";
+  ipv4 += std::to_string((ip >> 8) & 0xFF) + ".";
+  ipv4 += std::to_string(ip & 0xFF);
+  return ipv4;
 }
 
 /**
@@ -110,45 +113,52 @@ void PWOSPFAssignment::print_map() {
  */
 Size PWOSPFAssignment::pwospfQuery(const ipv4_t &ipv4) {
 
-  print_map();
-
-  // ipv4를 받으면 라우팅테이블에다가 검색을때려서 최적의경로코스트값을 리턴
   uint32_t inputIP = ntohl(NetworkUtil::arrayToUINT64(ipv4));
-  // uint32_t longestSubnet = 0;
-  // int longestMatch = -1;
 
-  // for (const auto &iter : routerSubnet) {
-  //   uint32_t currSubnet = iter.first;
+  /* ip가 특정 라우터의 인터페이스인 경우 해당 라우터까지의 cost 즉시 출력 */
+  for (const auto &mapIter : interface_map) {
+    for (const auto &setIter : mapIter.second) {
+      if (setIter == inputIP)
+        return cost_map[mapIter.first];
+    }
+  }
 
-  //   int match = 0;
-  //   uint32_t mask = 0x80000000;
+  /* 아닌 경우 해당 ip가 속한 서브넷 탐색 - longest prefix match */
+  uint32_t longestSubnet = 0;
+  int longestMatch = -1;
 
-  //   for (int i = 0; i < 32; i++) {
-  //     if ((inputIP & mask) == (currSubnet & mask))
-  //       match++;
-  //     else
-  //       break;
-  //     mask >>= 1;
-  //   }
+  for (const auto &iter : routerSubnet) {
+    uint32_t currSubnet = iter.first;
 
-  //   if (match > longestMatch) {
-  //     longestSubnet = currSubnet;
-  //     longestMatch = match;
-  //   }
-  // }
+    int match = 0;
+    uint32_t mask = 0x80000000;
 
-  std::pair<uint32_t, uint32_t> routers = routerSubnet[inputIP & MASK_INT];
+    for (int i = 0; i < 32; i++) {
+      if ((inputIP & mask) == (currSubnet & mask))
+        match++;
+      else
+        break;
+      mask >>= 1;
+    }
+
+    if (match > longestMatch) {
+      longestSubnet = currSubnet;
+      longestMatch = match;
+    }
+  }
+
+  std::pair<uint32_t, uint32_t> routers = routerSubnet[longestSubnet];
 
   int cost1 = cost_map[routers.first];
   int cost2 = cost_map[routers.second];
-
-  // std::cout << "cost1=" << cost1 << " cost2=" << cost2 << " | ";
 
   if (cost1 >= cost2) {
     if (cost2 == 0)
       return cost1;
     return cost2;
-  } else {
+  }
+
+  else {
     if (cost1 == 0)
       return cost2;
     return cost1;
@@ -392,6 +402,8 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
   packet->readData(ETH_HEAD_SIZE + 12, &srcIP, 4);
   srcIP = ntohl(srcIP);
 
+  interface_map[hello_t->header_ptr->router_id].emplace(srcIP);
+
   bool isUpdated = false;
 
   /* 내 인터페이스에 네이버 추가하기 */
@@ -422,8 +434,8 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
       if (!found) {
         uint32_t srcID = hello_t->header_ptr->router_id;
 
-        ipv4_t convertIP =
-            NetworkUtil::UINT64ToArray<sizeof(uint32_t)>((uint64_t)srcIP);
+        ipv4_t convertIP = NetworkUtil::UINT64ToArray<sizeof(uint32_t)>(
+            (uint64_t)htonl(srcIP));
         int port = getRoutingTable(convertIP);
         int cost = linkCost(port);
 
@@ -490,7 +502,7 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
         int cost = linkCost(port);
 
         pwospf_lsu_entry_t *temp = new pwospf_lsu_entry_t;
-        temp->subnet = setIter->ipAddr & setIter->mask;
+        temp->subnet = setIter->ipAddr;
         temp->mask = setIter->mask;
         temp->router_id = 0;
         temp->cost = 0;
@@ -498,9 +510,9 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
         lsu_t->entries[i] = *temp;
 
         uint32_t srcID = my_router->routerID;
-        uint32_t destIP = temp->subnet;
+        uint32_t destSubnet = (temp->subnet) & (temp->mask);
 
-        routerSubnet[destIP] = std::make_pair(srcID, 0);
+        routerSubnet[destSubnet] = std::make_pair(srcID, 0);
 
         delete temp;
         i++;
@@ -510,7 +522,7 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
         for (const auto &[nb1, nb2, nb3] : setIter->neighbor) {
 
           pwospf_lsu_entry_t *temp = new pwospf_lsu_entry_t;
-          temp->subnet = nb2 & setIter->mask;
+          temp->subnet = nb2;
           temp->mask = setIter->mask;
           temp->router_id = nb1;
           temp->cost = nb3;
@@ -518,10 +530,10 @@ void PWOSPFAssignment::handleHello(Packet *packet) {
           lsu_t->entries[i] = *temp;
 
           uint32_t srcID = my_router->routerID;
-          uint32_t destIP = temp->subnet;
+          uint32_t destSubnet = (temp->subnet) & (temp->mask);
           uint32_t destID = nb1;
 
-          routerSubnet[destIP] = std::make_pair(srcID, destID);
+          routerSubnet[destSubnet] = std::make_pair(srcID, destID);
 
           delete temp;
           i++;
@@ -588,8 +600,11 @@ void PWOSPFAssignment::handleLSU(Packet *packet) {
       uint32_t destID = lsu_t->entries[i].router_id;
       int cost = lsu_t->entries[i].cost;
 
+      if (destID != 0)
+        interface_map[destID].emplace(destIP);
+
       topology_map[srcID][destID] = cost;
-      routerSubnet[destIP] = std::make_pair(srcID, destID);
+      routerSubnet[destIP & mask] = std::make_pair(srcID, destID);
     }
     // 다익스트라 알고리즘 실행
     dijkstra();
@@ -629,14 +644,6 @@ void PWOSPFAssignment::handleLSU(Packet *packet) {
       }
     }
   }
-  // TTL은 forwarding에서만 쓰이고 handling 할 때는 안 쓰임
-  // TTL 은 목적지로 가면서 점점 줄어야함. TTL이 0이하가 되면 flood 되면 안
-  // 됨. database 에 없는 host 로부터 온 패킷, database 업데이트 후 djikstra
-  // database 에 있는 host 로부터 온 패킷, database 업데이트 후 djikstra
-
-  // 메시지가 온 neighbor 제외한 neighbor에게 패킷 전송
-  // LSUTIMEOUT 안에 패킷이 안 오면 제거.
-  // area id - authenticationtype receiving router의 그것과 같아야함
   delete lsu_t;
 }
 
