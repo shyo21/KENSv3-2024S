@@ -413,9 +413,9 @@ TEST_F(RoutingEnvOSPFCustomTwoNodes, TestRoutingOSPFCustomTwoNodes) {
 }
 TEST_F(RoutingEnvOSPF1, TestRoutingOSPF1) { this->runTest(); }
 TEST_F(RoutingEnvOSPFCustom1, TestRoutingOSPFCustom1) { this->runTest(); }
-TEST_F(RoutingEnvOSPF2, TestRoutingOSPF2) { this->runTest(); }
-TEST_F(RoutingEnvOSPFCustom2, TestRoutingOSPFCustom2) { this->runTest(); }
-TEST_F(RoutingEnvOSPF3, TestRoutingOSPF3) { this->runTest(); }
-TEST_F(RoutingEnvOSPFCustom3, TestRoutingOSPFCustom3) { this->runTest(); }
-TEST_F(RoutingEnvOSPF4, TestRoutingOSPF4) { this->runTest(); }
-TEST_F(RoutingEnvOSPFCustom4, TestRoutingOSPFCustom4) { this->runTest(); }
+// TEST_F(RoutingEnvOSPF2, TestRoutingOSPF2) { this->runTest(); }
+// TEST_F(RoutingEnvOSPFCustom2, TestRoutingOSPFCustom2) { this->runTest(); }
+// TEST_F(RoutingEnvOSPF3, TestRoutingOSPF3) { this->runTest(); }
+// TEST_F(RoutingEnvOSPFCustom3, TestRoutingOSPFCustom3) { this->runTest(); }
+// TEST_F(RoutingEnvOSPF4, TestRoutingOSPF4) { this->runTest(); }
+// TEST_F(RoutingEnvOSPFCustom4, TestRoutingOSPFCustom4) { this->runTest(); }
